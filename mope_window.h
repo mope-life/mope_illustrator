@@ -11,6 +11,8 @@
 
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
+#define UNICODE
+#define _UNICODE
 #include <Windows.h>
 #include <strsafe.h>
 
@@ -19,15 +21,9 @@ namespace
 {
     std::wstring wfromcstr(const char* cstr)
     {
-        const size_t len = strlen(cstr) + 1;
-        wchar_t* buff = new wchar_t[len];
-        size_t byteswritten;
-
-        mbstowcs_s(&byteswritten, buff, len, cstr, len);
-
-        std::wstring wstr = buff;
-        delete[] buff;
-
+        size_t len = strlen(cstr);
+        std::wstring wstr(len, '\0');
+        mbstowcs(wstr.data(), cstr, len);
         return wstr;
     }
 }
@@ -55,6 +51,7 @@ namespace mope
     class Window
     {
     public:
+        Window(LPCWSTR name, int w, int h, HINSTANCE hInstance = GetModuleHandleA(NULL));
         Window(LPCSTR name, int w, int h, HINSTANCE hInstance = GetModuleHandleA(NULL));
 
         // Must be called on the rendering thread before making any OpenGL calls
@@ -63,7 +60,7 @@ namespace mope
         void MessageLoop();
         void Swap();
         void Destroy();
-        void ErrorExit(LPTSTR lpszFunction);
+        void ErrorExit(LPCWSTR lpszFunction);
 
         // Returns true only after the user has clicked the big red X
         bool WantsToClose();
@@ -72,7 +69,8 @@ namespace mope
         static LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
         // Makes the given string the title of the window
-        void SetTitle(const char* title);
+        void SetTitle(LPCWSTR title);
+        void SetTitle(LPCSTR title);
 
         void SetDimensions(int w, int h);
         void GetDimensions(int* o_w, int* o_h);
@@ -87,7 +85,7 @@ namespace mope
 
         bool bClosing = false;
         bool bRenderingContextCreated = false;
-        std::string windowClass{ "mope" };
+        LPCWSTR windowClass = L"mope";
 
         HWND m_hwnd = NULL;
         HGLRC m_hrc = NULL;
@@ -117,7 +115,7 @@ namespace mope
         void updateSize();
 
         ATOM registerClass(HINSTANCE hInstance);
-        HWND createWindow(LPCSTR, HINSTANCE, int w, int h);
+        HWND createWindow(LPCWSTR, HINSTANCE, int w, int h);
         HGLRC createRenderingContext();
 
         // Most Windows event handling is delegated to this...
@@ -189,7 +187,7 @@ namespace mope
     |  API                                                                     |
     \*========================================================================*/
 
-    Window::Window(LPCSTR lpWindowName, int w, int h, HINSTANCE hInstance)
+    Window::Window(LPCWSTR lpWindowName, int w, int h, HINSTANCE hInstance)
     {
         // buildKeymap();
         bool success =
@@ -208,9 +206,13 @@ namespace mope
             updateSize();
         }
         else {
-            ErrorExit((LPTSTR)"Window construction");
+            ErrorExit(L"Window construction");
         }
     }
+
+    Window::Window(LPCSTR name, int w, int h, HINSTANCE hInstance)
+        : Window(wfromcstr(name).c_str(), w, h, hInstance)
+    {}
 
     bool Window::GetRenderingContext()
     {
@@ -235,10 +237,16 @@ namespace mope
         return bClosing;
     }
 
-    void Window::SetTitle(const char* title)
+    void Window::SetTitle(LPCSTR title)
     {
-        SetWindowTextA(m_hwnd, title);
+        SetTitle(wfromcstr(title).c_str());
     }
+
+    void Window::SetTitle(LPCWSTR title)
+    {
+        SetWindowText(m_hwnd, title);
+    }
+
 
     void Window::SetDimensions(int w, int h)
     {
@@ -280,7 +288,7 @@ namespace mope
 
     // Copied directly from
     // https://learn.microsoft.com/en-us/windows/win32/debug/retrieving-the-last-error-code
-    void Window::ErrorExit(LPTSTR lpszFunction)
+    void Window::ErrorExit(LPCWSTR lpszFunction)
     {
         // Retrieve the system error message for the last-error code
 
@@ -301,7 +309,7 @@ namespace mope
         // Display the error message and exit the process
 
         lpDisplayBuf = (LPVOID)LocalAlloc(LMEM_ZEROINIT,
-            (lstrlen((LPCTSTR)lpMsgBuf) + lstrlen((LPCTSTR)lpszFunction) + 40) * sizeof(TCHAR));
+            (lstrlen((LPCTSTR)lpMsgBuf) + lstrlen(lpszFunction) + 40) * sizeof(TCHAR));
         StringCchPrintf((LPTSTR)lpDisplayBuf,
             LocalSize(lpDisplayBuf) / sizeof(TCHAR),
             TEXT("%s failed with error %d: %s"),
@@ -320,21 +328,21 @@ namespace mope
     ATOM Window::registerClass(HINSTANCE hInstance)
     {
         WNDCLASSEX wcx{}, gwc{};
-        if (GetClassInfoExA(hInstance, windowClass.c_str(), &gwc))
+        if (GetClassInfoEx(hInstance, windowClass, &gwc))
         {
-            UnregisterClassA(windowClass.c_str(), hInstance);
+            UnregisterClass(windowClass, hInstance);
         }
 
         wcx.cbSize = sizeof(WNDCLASSEX);
         wcx.style = CS_OWNDC | CS_HREDRAW | CS_VREDRAW;
         wcx.lpfnWndProc = Window::WindowProc;
-        wcx.lpszClassName = this->windowClass.c_str();
+        wcx.lpszClassName = windowClass;
         wcx.hbrBackground = NULL;
 
-        return RegisterClassExA(&wcx);
+        return RegisterClassEx(&wcx);
     }
 
-    HWND Window::createWindow(LPCSTR lpWindowName, HINSTANCE hInstance, int w, int h)
+    HWND Window::createWindow(LPCWSTR lpWindowName, HINSTANCE hInstance, int w, int h)
     {
         // Use default width/height if args are 0
         int width = w > 0 ? w : CW_USEDEFAULT;
@@ -348,8 +356,8 @@ namespace mope
         HWND hWndParent = NULL;
         HMENU hMenu = NULL;
 
-        return CreateWindowExA(
-            dwExStyle, windowClass.c_str(), lpWindowName, dwStyle,
+        return CreateWindowEx(
+            dwExStyle, windowClass, lpWindowName, dwStyle,
             x, y, width, height, hWndParent, hMenu, hInstance, this
         );
     }
@@ -401,19 +409,19 @@ namespace mope
         if (uMsg == WM_NCCREATE) {
             CREATESTRUCT* pCreate = (CREATESTRUCT*)lParam;
             pThis = (Window*)pCreate->lpCreateParams;
-            SetWindowLongPtrA(hwnd, GWLP_USERDATA, (LONG_PTR)pThis);
+            SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)pThis);
 
             pThis->m_hwnd = hwnd;
         }
         // Retrieve said pointer on subsequent events
         else {
-            pThis = (Window*)GetWindowLongPtrA(hwnd, GWLP_USERDATA);
+            pThis = (Window*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
         }
         if (pThis) {
             return pThis->handleMessage(uMsg, wParam, lParam);
         }
         else {
-            return DefWindowProcA(hwnd, uMsg, wParam, lParam);
+            return DefWindowProc(hwnd, uMsg, wParam, lParam);
         }
     }
 

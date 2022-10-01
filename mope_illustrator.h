@@ -18,10 +18,13 @@
 #include "mope_vec/mope_vec.h"
 
 #if defined(_WIN32)
-#define NOMINMAX
-#define WIN32_LEAN_AND_MEAN
-// Needed to load certain GL features in GL/GL.h
-#include <Windows.h>
+/*
+* This header is currently strongly coupled with mope_window.h, which is a window class utilizing
+* WINAPI. The plan is to decouple these ideas by providing making Illustrator into a class template
+* and providing a window interface to the Illustrator.
+*/
+#define MOPE_WINDOW_IMPL
+#include "mope_window.h"
 #define GL_EXTRA_PROCS \
     GL_PROC(BOOL, wglSwapIntervalEXT, int interval)
 #else
@@ -31,14 +34,6 @@
 
 #include <GL/GL.h>
 #pragma comment(lib, "opengl32.lib")
-
-/*
-* This header is currently strongly coupled with mope_window.h, which is a window class utilizing
-* WINAPI. The plan is to decouple these ideas by providing making Illustrator into a class template
-* and providing a window interface to the Illustrator.
-*/
-#define MOPE_WINDOW_IMPL
-#include "mope_window.h"
 
 // cruft
 #pragma push_macro("near")
@@ -151,9 +146,9 @@ namespace mope
     constexpr float fTau = (float)tau;
 
     // Size information about the default fontsheet
-    constexpr int glyphsPerRow = 19;
-    constexpr int glyphRows = 5;
-    constexpr vec2i pxGlyphSize = { 18, 32 };
+    constexpr int glyphsPerRow = 16;
+    constexpr int glyphRows = 6;
+    constexpr vec2i pxGlyphSize = { 16, 32 };
     constexpr vec2i pxFontSheetSize = { pxGlyphSize.x() * glyphsPerRow, pxGlyphSize.y() * glyphRows };
     constexpr float glyphAspect = (float)pxGlyphSize.x() / pxGlyphSize.y();
 
@@ -167,8 +162,6 @@ namespace mope
         constexpr mat4f scale(const vec3f& factors);
         mat4f rotation(const float angle, const vec3f& axis, const vec3f& origin);
         // Projection matrices
-        // Unfortunately, "near" and "far" are both #defined in a certain Windows header...
-
         constexpr mat4f ortho(
             const float left,
             const float right,
@@ -741,7 +734,72 @@ namespace mope
 
     void Illustrator::buildFontSheet()
     {
-        fontSheet.Make("assets/mopespritesheet-small.png");
+        const char* dat =
+            "OOOOOOOOOJQO,R7ROO9SO$QO,R7ROO9TCT*Q+TKR7ROO;SAU*Q+UJR7ROO<R@S-Q.SIR7ROO<R@R.Q/RIR#S+S#R(R-V-U(S#R*"
+            "R+R%R%S'S(R+Z*R.Q/RIY)Y(R,X+V'U!R)T*R%R&S%S)R+Z*R.Q/RIS%R'R%S(R,P&S)S*S$S)T*R%R'S#S*R+S1R.Q/RIS%R'R"
+            "%S(R3R)R+R%S)T*S#S(W*T+S0R.Q/RIR'R%R'R(R3R)R+R&R(V(T#T(U+T,R0R.Q/RIR'R%R'R(R2S)R+R&R(R!R(R!P#P!R(U*"
+            "V+S/R.Q/RIR'R%R'R(R/V)R+R&R(R!R(R!S!R)S+R!R,S-R/Q0R.S7R'R%R'R(R-W*R+R&R'S!S'R!S!R*Q,R!R-S)T0Q1T$Q%V"
+            "5R'R%R'R(R,V,R+R&R'R$R&R$Q$R(S*R$R-R)T0Q1T$W$Q5R'R%R'R(R,S/R+R&R'R$R&R$Q$R'U)R$R-S+R/Q0R)S<S%R'R%S("
+            "S+R0R+R&R&R&R%R)R&W'S$S-S+R.Q/RIS%R'R%S(T%P%S%P*R+R&R&R&R%R)R&R#R'R&R.S*R.Q/RIY)Y(R!U&W&[&R&R&R&R$R"
+            "+R$S#S&R&R'Z*R.Q/RIR#S+S#R(R#S(U'[&R&R%R(R#R+R#S%S$R(R&Z*R.Q/ROO0ROO4R.Q/ROO0ROO4R.Q/ROO0ROO4R.Q/RO"
+            "O0ROO4S-Q.SOOOOGU*Q+UOOOOIT*Q+TOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO2UITOOOO5WHVOOOO3P&RKSOOOO"
+            "9RKROOOO9RKROO.T#R%R#S,T+S#R)U+R-S#R%R&R&]*R)R&S*U$R#R#R%R&R)U9V!R%Y)W)Y'Y)R,U!R%R&R&]*R)R%S*V$R#R#"
+            "R%R&R(W7S$T%S%R'S%Q'R$T&S&Q)R+S$S%R&R+R/R)R%R*S(R#R#R%R&R'R%R6R&S%S%R'R.R%S&R1R+R%S%R&R+R/R)R$S*R)R"
+            "#R#R%R&R'R%R6R'R%R'R%R.R'R%R2R*R'R%R&R+R/R)S!S+R)R#R#R%R&R&R'R5R'R%R'R%R.R'R%R2R*R'R%R&R+R/R)W,R)R#"
+            "R#R%R&R&R'R5S&R%R'R%R.R'R%](R*R'R%R&R+R/R)W,R)R#R#R%R&R&R'R6Z%R'R%R.R'R%](R*R'R%R&R+R/R)V-R)R#R#R%R"
+            "&R&R'R8X%R'R%R.R'R%R(R(R*R'R%R&R+R/R)V-R)R#R#R%R&R&R'R>R%R'R%R.R'R%R(R(R*R'R%R&R+R/R)R!S,R)R#R#R%R&"
+            "R&R'R>R%S%R'R-S%S&R&R)R+R%S%R&R+R/R)R#S+R)R#R#R%R&R'R%R7P'R&S%R'S%Q'R$T&S$S)R+S$S%S$S+R/R)R$S*R)R#R"
+            "#R%S$S'R%R7Y&Y)W)Y'X&['Y%R!U(V+V)R%S)R)V!S&R!U)W:U(R#S,T+S#R)U'[(S#R%R#S)V+V)R&S(R)R!R!S&R#S+UHRGR9"
+            "R:ROR1ROLRGR9R:ROR1RO2Q9RGR9R:ROR1RO1Q:RGR9S9R3R/R)R1RO0Q;RGR:V5R3R/R)R,WO/R;RGR;U5R3R/R)R,WO.ROOOO"
+            "OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO6`OOOOO+`OOOOOO'QOOO1U9UO2SOOO0U0R'UO1ROOO2R2R+RHR2T(R(S%V.R+U-S*"
+            "R&Q%S(S(R(])R2R+RHR0X&R(R$Y-R*W,S*R%R&R(R)R(])R1R,RHR/S$R&R'S$R%S,R)R%R+S*R%S%S&R*R(S2R1R,RHR/R&R%R"
+            "'R%P)R+R(R'R)U(S%S&S$S*R)S1R0R-RHR/R&R%R&S.R+R(R'R)U(S%S'R$R+R*R1R0R-RHR.R(R$R&R/R+R(R'R)U(T#T'S!S+"
+            "R*S0R/R.RHR.R(R$R%S/R+R(R'R)U(T#T(R!R,R+R0R/R.RHR.R(R$R$S/S+R(R'R(R#R'T#T(U-R+S/R.R/RHX(R(R$X.T,R(R"
+            "'R(R#R'T#P!R)T-R,S.R.R/RHZ&R(R$Y)X,R(R'R(R#R&R#S#R)R-T,R.R.R/RHR&R&R(R$R&R'W.R(R'R'S#S%R#S#R)R-T,S-"
+            "R-R0RHR'R%R(R$R'R%U1R(R'R'R%R%R#S#R(T+V,S,R-R0RHR'R%R(R$R'R%S3R(R'R'R%R%R#S#R'V*R!R-R,R,R1R(R)R3R'R"
+            "%R(R$R'R%R4R(R'R'R%R%R$Q$R'R!R)S!S,S+R,R1R)R'R4R'R&R&R%R'R%R4R(R'R&R'R$R)R&S!S(R$R-R+R+R2R*R%R5R'R&"
+            "R&R%R'R%R(P,R(R'R&R'R$R)R%S$S&R&R,S*R+R2R+R#R6R&R(R$R&R&R'S%Q,R(R'R&R'R#R+R$R&R%S&S,S)R*R3R,U7Y)X&Y"
+            ")X&_!R'R%S'S!R+R#S&S$R(R#])R*R3R-S8X,T(X+V'_!R'R%R)R!R+R!S(S!S(S!])U&R1U-SOOOO5U9UOOOOOOOOOOOOOOOOO"
+            "OOOOOOOOOOOOOOOOOOOOOOOOOOOO8VOOOOO2XOOOOO1S&POOOOO0ROOOOO8Q-R*R!X-U&V*[%R3U&R'R'Z&U)R(S#[%R(R$R&S)"
+            "T)Q.S(S!Z)X%X([%R1Y$R'R'Z$Y'R(R$[%R(R$R&S'X'Q&S!Q#R(R#R&R(S%Q%R%R'R.R0R&R$R'R+R(Q&R'R'S$R.R(R$R%T&S"
+            "$R&Q%X#R(R#R'R&R(P%R&R&R.R/R'R$R'R+R(P(R&R&S%R.R(R$R%T&R&R%Q%Q%R#S&S#R'R&R-R&R&R.R/R'R$R'R+R0R&R&R&"
+            "R.R(R$R%T&R&R%Q$Q'Q$Z$R'R%R.R'R%R.R.R(R$R'R+R0R&R%S&R.R(R$R$Q!R%R(R$Q$Q'Q$Z$R'R%R.R'R%R.R.R(R$R'R+R"
+            "0R&R$S'R.R(R$R$Q!R%R(R$Q$Q'Q$R&R$R'Q&R.R'R%R.R.R(R$R'R+R0R&R$R(R.R#R#R$R$Q!R%R(R$Q$Q'Q%R$R%R&R&R.R'"
+            "R%R.R.R%U$R'R+R0R&S!S(R.R#R#R$R#Q#R%R(R$Q%Q%R%R$R%X(R.R'R%Z&Z&R%U$[+R0R&W)R.R#R#R$R#Q#R%R(R$Q%X%R$R"
+            "%X(R.R'R%Z&Z&R.[+R0R&V*R.R#P!P#R$R#Q#R%R(R%Q&S!Q&R!R&R%R'R.R'R%R.R.R.R'R+R0R&R!R*R.R!Q!Q!R$R!Q$R%R("
+            "R%Q+Q&R!R&R&R&R.R'R%R.R.R.R'R+R0R&R#R)R.R!Q!Q!R$R!Q$R%R(R%R*Q&R!R&R&R&R.R'R%R.R.R.R'R+R0R&R$R(R.R!P"
+            "$P!R$R!Q$R%R(R&R(Q(T'R&R'R-R&R&R.R/R-R'R+R0R&R%R'R.T$T$T%R&R&R(R&R(T'R&R'S'P%R&R&R.R/R(P%R'R+R0R&R&"
+            "R&R.T$T$T%R&R&R)X)T'R%R)S%Q%R%R'R.R0S%Q%R'R+R0R&R'R%R.T$T$T%R'R$R,U*T'Y*X%X([%[(X%R'R'Z'W&R(R$R.S&S"
+            "$S&R'X<R(W.U&V*[%[*U&R'R'Z'W&R)R#R.S&S$S&R)TOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO"
+            "OOOOBQOOOOO9ROOOOO9QOAS*Z%['U/R)V-T*R/U*U-R.RO0R,W(Z%[%Y-R(Y)W*R,Y'W,R.RO0R+S#S+R)R.P'S,R(P'S'R%R)R"
+            ",R%R'P%S+R.R5P4P5R+R%R+R*S4S+R0R'R&R(S*R'R-R*R.R2S4S?R%R+R+S4R+R1R&Q'R)R*R'R-RLU4U<R'R*R,S3R$].R%R'"
+            "R)R*R'R-SIT']'T.R*R'R*R-S2R$].R%R'R)S)R'R.RFU)])U+R*R'R*R.S0S$Q&R1R%R'R*R)R'R(S#RDTDT)R*R!R#R*R/S.S"
+            "&Q%R1R%S&R*R*R%R'V!RDRHR)R*R!R#R*R0S)U(Q%R0R&S%R,R*W(R%S)R.R)TDT)S)R!R#R*R1S(V(Q$R)P&S&R!V,R+U(R&S)"
+            "R.R+U)])U,R)R'R*R1S,S(Q#R)X'R#S.S(R%R&R'R)R.R.T']'T/S(R'R*R2R.R'Q#R)W(R5R'R'R%R'R)R.R0U4U2S'R'R*R2R"
+            ".R(Q!R)R-R5R'R'R%R'RMS4S5S'R%R+R2R.R(Q!R)R.R4S&R'R%R'QO#P4P9R'R%R+R)P(S.R)T)R.R5R&R'R%R&ROIP'R'S#S'"
+            "Q#R)R%S'P'R+S)R/S%P.R'R%R'R%ROIQ%S(W(V)Y(X,S)Y)W&[&Y(WOKW+S,T+U,U.R)Y*U'[(U+TONTOOOOOOOOOOOOOOOOOOO"
+            "OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOEPOOOOO:PO3Q+QOQOOFPO2Q-QNRJROGPO2Q-QOQKRCR9Q$R+V/S(U#S8Q/QNR>R*RCR"
+            "9R$Q*Y,U&W!R9Q/Q?Q.R>R+RBR:Q$Q*P%P!R+R#R$S%T8R/R>Q.R>R+RO0Q$Q/P#R*Q%Q#S&S9R/R>Q.R>R,RO/Q%Q.P#R*Q%Q#"
+            "R&U7R1Q>QO.RO,_*P#R*R#R#R%S!Q7R1R=QO/R@R7_*P!S$Q&U$R%R$Q6R1R=Q=V:R@R;Q$Q-U&R%S%R$S$Q6R1R-P*^7V;R?R;"
+            "Q%Q*V)R,Q#S%Q6R1R-P*^O*R?R<Q$Q)T.R*V&Q6R1R(Q$P$Q+QO0R?R<Q$Q(S!P0R)T>R1R(R#P#R+QO1R>R8_$R#P*S%R(S>R1"
+            "R*V-QO1R>R,Q$Q&_$R#P)U&Q'R1Q-R1Q-R/QO2R=R,Q$Q+Q$Q'R#P(R#R,R2Q.R/R-R/QO2R=R,Q$Q+Q$Q'S!P$P$Q%Q,R2Q.R/"
+            "R+V-QO3R<R,Q$Q+Q$R'X$Q%Q,R2Q/Q/Q*R#P#RO?R<R,Q$Q+Q%Q)U%R#R,S$P-Q/Q/Q*Q$P$QO@R;R,Q$Q,Q$Q+P)U.V-Q0Q-Q0"
+            "POER;R,Q$Q=P*S0T.Q0Q-Q0POFRO=PO3Q+QOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO&";
+
+        Pixel* pixels = new Pixel[pxFontSheetSize.x() * pxFontSheetSize.y()];
+        Pixel* ptr = pixels;
+
+        for (size_t i = 0; i < 4917; ++i)
+        {
+            char c = dat[i];
+            char p = 0xff * (c > 'O');
+            size_t n = (size_t)(c - '!' - (p & 46) + (c == '!') - (c >= '\\'));
+            memset((void*)ptr, p, 4 * n);
+            ptr += n;
+        }
+
+        fontSheet.Make(pxFontSheetSize.x(), pxFontSheetSize.y(), pixels);
+        delete[] pixels;
     }
 
 
