@@ -11,8 +11,12 @@
 
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
+#ifndef UNICODE
 #define UNICODE
+#endif
+#ifndef _UNICODE
 #define _UNICODE
+#endif
 #include <Windows.h>
 #include <strsafe.h>
 
@@ -22,8 +26,11 @@ namespace
     std::wstring wfromcstr(const char* cstr)
     {
         size_t len = strlen(cstr);
-        std::wstring wstr(len, '\0');
-        mbstowcs(wstr.data(), cstr, len);
+        wchar_t* buf = new wchar_t[len + 1];
+        size_t returnValue{};
+        mbstowcs_s(&returnValue, buf, len + 1, cstr, len);
+        std::wstring wstr(buf);
+        delete[] buf;
         return wstr;
     }
 }
@@ -81,12 +88,7 @@ namespace mope
         int GetYDelta();
 
     private:
-        static std::unordered_map<unsigned int, uint8_t> keymap;
-
-        bool bClosing = false;
-        bool bRenderingContextCreated = false;
         LPCWSTR windowClass = L"mope";
-
         HWND m_hwnd = NULL;
         HGLRC m_hrc = NULL;
         HDC m_hdc = NULL;
@@ -100,17 +102,20 @@ namespace mope
         RECT windowRect;
         RECT clientRect;
 
-        // Used for reporting window width and height
+        // Window width and height reporting
         std::atomic<int> clientWidth{};
         std::atomic<int> clientHeight{};
 
-        // For reporting mouse movements
+        // Input reporting
         std::atomic<int> xDelta{};
         std::atomic<int> yDelta{};
-
         std::atomic<uint64_t> keystates[2];
+        
+        static std::unordered_map<unsigned int, uint8_t> keymap;
 
-    private:
+        bool bClosing = false;
+        bool bRenderingContextCreated = false;
+
         //void buildKeymap();
         void updateSize();
 
@@ -122,7 +127,7 @@ namespace mope
         LRESULT handleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam);
 
         // ... which then forwards events to the handlers
-        void handleMouseMove(LPARAM lparam, WPARAM wparam);
+        void handleMouseMove(LPARAM lparam);
         void handleClose();
         void handleSize(LPARAM lparam);
         void handleExitSizeMove();
@@ -264,7 +269,7 @@ namespace mope
     {
         int w, h;
         GetDimensions(&w, &h);
-        return (float)w / h;
+        return static_cast<float>(w) / h;
     }
 
     std::array<uint64_t, 2> Window::GetKeyStates()
@@ -429,7 +434,7 @@ namespace mope
     {
         switch (uMsg)
         {
-        case WM_MOUSEMOVE:      handleMouseMove(lParam, wParam);    break;
+        case WM_MOUSEMOVE:      handleMouseMove(lParam);    break;
         case WM_KEYDOWN:        handleKeyDown(wParam);              break;  
         case WM_KEYUP:          handleKeyUp(wParam);                break;
         case WM_SIZE:           handleSize(lParam);                 break;
@@ -439,13 +444,13 @@ namespace mope
         case WM_CLOSE:		    handleClose();                      break;
         case WM_DESTROY:	    PostQuitMessage(0);                 break;
 
-        default: return DefWindowProcA(m_hwnd, uMsg, wParam, lParam);
+        default: return DefWindowProc(m_hwnd, uMsg, wParam, lParam);
         }
 
         return 0;
     }
 
-    void Window::handleMouseMove(LPARAM lparam, WPARAM wparam)
+    void Window::handleMouseMove(LPARAM lparam)
     {
         // Since we set cursor pos again in this method, we guard against infinite recursion
         static bool setFlag = false;

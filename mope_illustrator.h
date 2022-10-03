@@ -150,7 +150,7 @@ namespace mope
     constexpr int glyphRows = 6;
     constexpr vec2i pxGlyphSize = { 16, 32 };
     constexpr vec2i pxFontSheetSize = { pxGlyphSize.x() * glyphsPerRow, pxGlyphSize.y() * glyphRows };
-    constexpr float glyphAspect = (float)pxGlyphSize.x() / pxGlyphSize.y();
+    constexpr float glyphAspect = static_cast<float>(pxGlyphSize.x()) / pxGlyphSize.y();
 
     namespace gl
     {
@@ -185,8 +185,6 @@ namespace mope
     class Shader
     {
     public:
-        Shader() = default;
-
         GLuint ID();
         void Use();
 
@@ -224,7 +222,7 @@ namespace mope
     class Texture
     {
     public:
-        Texture() = default;
+        virtual ~Texture() = default;
 
         GLuint ID();
         virtual void Bind() = 0;
@@ -247,7 +245,7 @@ namespace mope
     class Texture2D : public Texture
     {
     public:
-        Texture2D() = default;
+        ~Texture2D() = default;
 
         void Bind() override;
         void Make(std::string_view filename);
@@ -1311,7 +1309,7 @@ namespace mope
 
         // This low-level GL code should probably be abstracted away
 
-        glBufferData(GL_ARRAY_BUFFER, 4 * 5 * sizeof(GLfloat), vertices, GL_STATIC_DRAW);
+        glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(4) * 5 * sizeof(GLfloat), vertices, GL_STATIC_DRAW);
 
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(GL_FLOAT), (void*)0);
         glEnableVertexAttribArray(0);
@@ -1365,7 +1363,7 @@ namespace mope
 
         // This low-level GL code should probably be abstracted away
 
-        glBufferData(GL_ARRAY_BUFFER, m_len * 4 * 5 * sizeof(GLfloat), vertices, GL_STATIC_DRAW);
+        glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(m_len)* 4 * 5 * sizeof(GLfloat), vertices, GL_STATIC_DRAW);
 
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(GLfloat), (void*)0);
         glEnableVertexAttribArray(0);
@@ -1374,7 +1372,7 @@ namespace mope
         glEnableVertexAttribArray(1);
 
         m_ebo.Bind();
-        glBufferData(GL_ELEMENT_ARRAY_BUFFER, m_len * 6 * sizeof(GLushort), indices, GL_STATIC_DRAW);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr>(m_len) * 6 * sizeof(GLushort), indices, GL_STATIC_DRAW);
 
         delete[] vertices;
         delete[] indices;
@@ -1404,7 +1402,7 @@ namespace mope
         m_shader.SetUniform("u_Model", m_model);
 
         m_vao.Bind();
-        glDrawElements(GL_TRIANGLES, m_len * 6, GL_UNSIGNED_SHORT, 0);
+        glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(m_len) * 6, GL_UNSIGNED_SHORT, 0);
     }
 }
 #endif //MOPE_ILLUSTRATOR_IMPL

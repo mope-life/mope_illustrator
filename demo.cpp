@@ -19,7 +19,7 @@ public:
 
     bool ThreadStart()
     {
-        float glyphHeight = 0.3;
+        float glyphHeight = 0.3f;
         text = std::make_unique<mope::TextSprite>(
             fontSheet,
             spriteShader,
