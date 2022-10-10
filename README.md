@@ -4,6 +4,5 @@
 Requirements:
 - https://github.com/nothings/stb/blob/master/stb_image.h
 - [mope_vec](https://github.com/mope-life/mope_vec) (included as a submodule)
-- C++17 (for now)
 
 ### actual documentation forthcoming

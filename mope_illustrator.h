@@ -941,8 +941,8 @@ namespace mope
     void Camera::Update()
     {
         // Update the transformation basis vectors
-        basisZ = (vec3f{ sin(m_yaw) * cos(m_pitch), -sin(m_pitch), cos(m_yaw) * cos(m_pitch) }.funit());
-        basisX = (vec3f{ 0.f, 1.f, 0.f }.cross(basisZ).funit());
+        basisZ = (vec3f{ sin(m_yaw) * cos(m_pitch), -sin(m_pitch), cos(m_yaw) * cos(m_pitch) }.unitf());
+        basisX = (vec3f{ 0.f, 1.f, 0.f }.cross(basisZ).unitf());
         basisY = basisZ.cross(basisX);
 
         // Build the rotation matrix (inverse)
