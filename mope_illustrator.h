@@ -9,6 +9,7 @@
 
 #include <chrono>
 #include <thread>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -57,6 +58,7 @@ typedef char GLchar;
 #define	GL_LINK_STATUS						0x8B82
 #define GL_TEXTURE_3D						0x806F
 #define GL_TEXTURE0							0x84C0
+#define GL_RG							    0x8227
 
 #define GL_PROC_LIST \
     GL_PROC(void,	glGenBuffers,				GLsizei n, GLuint* buffers) \
@@ -249,12 +251,14 @@ namespace mope
 
         void Bind() override;
         void Make(std::string_view filename);
+        void Make(GLsizei width, GLsizei height, Pixel* data);
+        void Make(GLsizei width, GLsizei height, float* data);
         void Make(
             GLsizei width,
             GLsizei height,
-            Pixel* data,
-            GLenum format = GL_RGBA,
-            GLenum type = GL_UNSIGNED_BYTE
+            void* data,
+            GLenum format,
+            GLenum type
         );
     };
 
@@ -408,6 +412,8 @@ namespace mope
     {
     public:
         Illustrator(std::string windowName, vec2i windowDims);
+        virtual ~Illustrator();
+        // Copy and move constructors / assignment operators are deleted
 
         // User should overload this to do stuff to prepare for rendering.
         // Return false to abort starting the game.
@@ -433,8 +439,8 @@ namespace mope
         void SetClearColor(vec4f color);
 
     protected:
-        Shader spriteShader{};
-        Texture2D fontSheet{};
+        Shader spriteShader{ };
+        Texture2D fontSheet{ };
 
         // Purely conceptual Camera wrapper
         Camera camera{ spriteShader, "u_View" };
@@ -454,13 +460,20 @@ namespace mope
         double m_frameTime{ 0 };
         double m_fpsUpdateTimer{ 0 };
         bool m_showFps{ true };
+        
+        Window m_window{};
 
-        std::string m_name{ "" };
-        int m_windowWidth{ 0 };
-        int m_windowHeight{ 0 };
+        vec2i m_windowDims;
         float m_userAspect{ 1.f };
+        std::string m_windowName;
 
-        Window m_window;
+        // Thread locking for window creation
+        std::mutex m_mtxWindow{};
+        std::condition_variable m_cvWindow{};
+        
+        // Running window on another thread lets us ensure that all OpenGL resources are returned
+        // before the context is destroyed
+        std::thread m_threadWindow{};
 
     private:
         // Set things up for the core thread that need an OpenGL context
@@ -468,6 +481,7 @@ namespace mope
         // Tear things down after the core thread that need an OpenGL context
         void tearDownGL();
 
+        void windowThread();
         void coreThread();
 
         bool isKeyState(Key k, uint64_t* state);
@@ -592,11 +606,18 @@ namespace mope::gl
 namespace mope
 {
     Illustrator::Illustrator(std::string windowName, vec2i windowDims)
-        : m_name(windowName)
-        , m_window(m_name.c_str(), windowDims.x(), windowDims.y())
+        : m_windowName{ windowName }
+        , m_windowDims{ windowDims }
+    {}
+
+    Illustrator::~Illustrator()
     {
-        m_window.GetDimensions(&m_windowWidth, &m_windowHeight);
-        m_userAspect = m_window.AspectRatio();
+        // At this point any OpenGL resources that a derived class obtained
+        // should have been destructed. Safe to release context.
+        m_window.Destroy();
+        
+        // The window's message loop should end soon
+        m_threadWindow.join();
     }
 
 
@@ -606,9 +627,8 @@ namespace mope
 
     void Illustrator::Run()
     {
-        std::thread t{ &Illustrator::coreThread, this };
-        m_window.MessageLoop();
-        t.join();
+        m_threadWindow = std::thread{ &Illustrator::windowThread, this };
+        coreThread();
     }
     
     bool Illustrator::Pressed(Key k) { return isKeyState(k, m_pressed); }
@@ -632,11 +652,11 @@ namespace mope
             int fps = (int)(m_frameCount / m_fpsUpdateTimer);
             m_frameCount = 0;
             m_fpsUpdateTimer = 0;
-            std::string strFps = m_name + " FPS: " + std::to_string(fps);
+            std::string strFps = m_windowName + " FPS: " + std::to_string(fps);
             m_window.SetTitle(strFps.c_str());
         }
         else {
-            m_window.SetTitle(m_name.c_str());
+            m_window.SetTitle(m_windowName.c_str());
         }
     }
 
@@ -726,7 +746,7 @@ namespace mope
         spriteShader.Make(vertexSrc, fragmentSrc);
         spriteShader.Use();
         spriteShader.SetUniform("u_Projection",
-            gl::perspective(fPi / 4.f, m_window.AspectRatio(), 0.1f, 100.f)
+            gl::perspective(fPi / 4.f, m_userAspect, 0.1f, 100.f)
         );
     }
 
@@ -805,8 +825,30 @@ namespace mope
     |  Core thread                                                             |
     \*========================================================================*/
 
+    void Illustrator::windowThread()
+    {
+        {
+            std::unique_lock l{ m_mtxWindow };
+
+            m_window.Build(m_windowName.c_str(), m_windowDims.x(), m_windowDims.y());
+
+            auto dims = m_window.GetDimensions();
+            m_windowDims = { dims.first, dims.second };
+            m_userAspect = static_cast<float>(dims.first) / dims.second;
+
+            m_cvWindow.notify_all();
+        }
+
+        m_window.MessageLoop();
+    }
+
     void Illustrator::coreThread()
     {
+        // Wait for the window to be created
+        {
+            std::unique_lock l{ m_mtxWindow };
+            m_cvWindow.wait(l, [this]() { return m_window.IsBuilt(); });
+        }
         setupGL();
 
         // Give the app a chance to set things up
@@ -835,17 +877,16 @@ namespace mope
             }
         }
 
-        // Give the app a chance to release OpenGL resources
+        // Give the app a chance to clean up
         ThreadEnd();
-
         tearDownGL();
-        m_window.Destroy();
     }
 
     void Illustrator::updateInputs()
     {
-        m_xDelta = m_window.GetXDelta();
-        m_yDelta = m_window.GetYDelta();
+        auto deltas = m_window.GetDeltas();
+        m_xDelta = deltas.first;
+        m_yDelta = deltas.second;
 
         std::array<uint64_t, 2> newstates = m_window.GetKeyStates();
 
@@ -864,7 +905,7 @@ namespace mope
         if (m_fpsUpdateTimer >= 1.0)
         {
             if (m_showFps) {
-                std::string strFps = m_name + " FPS: " + std::to_string(m_frameCount);
+                std::string strFps = m_windowName + " FPS: " + std::to_string(m_frameCount);
                 m_window.SetTitle(strFps.c_str());
             }
             m_fpsUpdateTimer -= 1;
@@ -875,26 +916,24 @@ namespace mope
     void Illustrator::updateWindow()
     {
         // get current window size
-        int newWidth, newHeight;
-        m_window.GetDimensions(&newWidth, &newHeight);
+        auto newDims = m_window.GetDimensions();
 
         // make changes only if the window size has changed
-        if (newWidth != m_windowWidth || newHeight != m_windowHeight) {
+        if (newDims.first != m_windowDims.x() || newDims.second != m_windowDims.y()) {
 
-            m_windowWidth = newWidth;
-            m_windowHeight = newHeight;
+            m_windowDims = vec2i{ newDims.first, newDims.second };
 
             // try to maintain original aspect ratio and keep the viewport centered
-            float newAspect = m_window.AspectRatio();
+            float newAspect = static_cast<float>(m_windowDims.x()) / m_windowDims.y();
             if (newAspect > m_userAspect) {
-                int calcWidth = (int)(m_windowHeight * m_userAspect);
-                int x = (m_windowWidth - calcWidth) / 2;
-                glViewport(x, 0, calcWidth, m_windowHeight);
+                int calcWidth = (int)(m_windowDims.y() * m_userAspect);
+                int x = (m_windowDims.x() - calcWidth) / 2;
+                glViewport(x, 0, calcWidth, m_windowDims.y());
             }
             else {
-                int calcHeight = (int)((float)m_windowWidth / m_userAspect);
-                int y = (m_windowHeight - calcHeight) / 2;
-                glViewport(0, y, m_windowWidth, calcHeight);
+                int calcHeight = (int)((float)m_windowDims.x() / m_userAspect);
+                int y = (m_windowDims.y() - calcHeight) / 2;
+                glViewport(0, y, m_windowDims.x(), calcHeight);
             }
         }
     }
@@ -1144,16 +1183,28 @@ namespace mope
         uint8_t* data = stbi_load(filename.data(), &width, &height, &nChannels, 0);
 
         int fmt =
+            nChannels == 1 ? GL_RED :
+            nChannels == 2 ? GL_RG :
             nChannels == 3 ? GL_RGB :
-            nChannels == 4 ? GL_RGBA : 0;
-        if (!fmt) throw std::exception("Problem loading image.");
+            nChannels == 4 ? GL_RGBA :
+            (throw std::exception("Problem loading image."), 0);
 
-        Make(width, height, (Pixel*)data, fmt);
+        Make(width, height, (void*)data, fmt, GL_UNSIGNED_BYTE);
 
         stbi_image_free(data);
     }
 
-    void Texture2D::Make(GLsizei width, GLsizei height, Pixel* data, GLenum format, GLenum type)
+    void Texture2D::Make(GLsizei width, GLsizei height, Pixel* data)
+    {
+        Make(width, height, (void*)data, GL_RGBA, GL_UNSIGNED_BYTE);
+    }
+
+    void Texture2D::Make(GLsizei width, GLsizei height, float* data)
+    {
+        Make(width, height, (void*)data, GL_RED, GL_FLOAT);
+    }
+
+    void Texture2D::Make(GLsizei width, GLsizei height, void* data, GLenum format, GLenum type)
     {
         m_texture = std::make_shared<_Texture>();
         Bind();

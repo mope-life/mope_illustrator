@@ -6,6 +6,7 @@
 #pragma once
 
 #include <array>
+#include <utility>
 #include <atomic>
 #include <unordered_map>
 
@@ -55,11 +56,15 @@ namespace mope
         AlphaNum, Any, None
     };
 
+    typedef std::pair<int, int> int_pair;
+    typedef std::atomic<int_pair> atomic_int_pair;
+
     class Window
     {
     public:
-        Window(LPCWSTR name, int w, int h, HINSTANCE hInstance = GetModuleHandleA(NULL));
-        Window(LPCSTR name, int w, int h, HINSTANCE hInstance = GetModuleHandleA(NULL));
+        // Creates the window and returns true if successful
+        bool Build(LPCWSTR name, int w, int h, HINSTANCE hInstance = GetModuleHandle(NULL));
+        bool Build(LPCSTR name, int w, int h, HINSTANCE hInstance = GetModuleHandle(NULL));
 
         // Must be called on the rendering thread before making any OpenGL calls
         bool GetRenderingContext();
@@ -67,10 +72,12 @@ namespace mope
         void MessageLoop();
         void Swap();
         void Destroy();
-        void ErrorExit(LPCWSTR lpszFunction);
 
         // Returns true only after the user has clicked the big red X
         bool WantsToClose();
+
+        // Returns true if the window and rendering context has been created
+        bool IsBuilt();
 
         // Callback for Windows event handling
         static LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -80,18 +87,19 @@ namespace mope
         void SetTitle(LPCSTR title);
 
         void SetDimensions(int w, int h);
-        void GetDimensions(int* o_w, int* o_h);
-        float AspectRatio();
 
+        int_pair GetDimensions();
+        int_pair GetDeltas();
         std::array<uint64_t, 2> GetKeyStates();
-        int GetXDelta();
-        int GetYDelta();
 
     private:
         LPCWSTR windowClass = L"mope";
         HWND m_hwnd = NULL;
         HGLRC m_hrc = NULL;
         HDC m_hdc = NULL;
+
+        bool bBuilt = false;
+        bool bClosing = false;
         
         // Old cursor clip rectangle before the application gets focus
         // Should be restored when the application loses focus
@@ -102,26 +110,15 @@ namespace mope
         RECT windowRect;
         RECT clientRect;
 
-        // Window width and height reporting
-        std::atomic<int> clientWidth{};
-        std::atomic<int> clientHeight{};
-
-        // Input reporting
-        std::atomic<int> xDelta{};
-        std::atomic<int> yDelta{};
-        std::atomic<uint64_t> keystates[2];
-        
+        atomic_int_pair m_dimensions{ std::make_pair<int, int>(0, 0) };
+        atomic_int_pair m_deltas{ std::make_pair<int, int>(0, 0) };
+        std::atomic<std::array<uint64_t, 2>> m_keystates{ { 0, 0 } };
         static std::unordered_map<unsigned int, uint8_t> keymap;
-
-        bool bClosing = false;
-        bool bRenderingContextCreated = false;
-
-        //void buildKeymap();
-        void updateSize();
 
         ATOM registerClass(HINSTANCE hInstance);
         HWND createWindow(LPCWSTR, HINSTANCE, int w, int h);
         HGLRC createRenderingContext();
+        void updateSize();
 
         // Most Windows event handling is delegated to this...
         LRESULT handleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -192,10 +189,10 @@ namespace mope
     |  API                                                                     |
     \*========================================================================*/
 
-    Window::Window(LPCWSTR lpWindowName, int w, int h, HINSTANCE hInstance)
+    bool Window::Build(LPCWSTR lpWindowName, int w, int h, HINSTANCE hInstance)
     {
         // buildKeymap();
-        bool success =
+        bBuilt =
             // class atom != 0
             (registerClass(hInstance) != 0)
             // m_hwnd != NULL
@@ -205,19 +202,19 @@ namespace mope
             // m_hrc != NULL
             && (m_hrc = createRenderingContext()) != NULL;
 
-        if (success) {
+        if (bBuilt) {
             ShowWindow(m_hwnd, SW_SHOWDEFAULT);
             ShowCursor(FALSE);
             updateSize();
         }
-        else {
-            ErrorExit(L"Window construction");
-        }
+
+        return bBuilt;
     }
 
-    Window::Window(LPCSTR name, int w, int h, HINSTANCE hInstance)
-        : Window(wfromcstr(name).c_str(), w, h, hInstance)
-    {}
+    bool Window::Build(LPCSTR name, int w, int h, HINSTANCE hInstance)
+    {
+        return Build(wfromcstr(name).c_str(), w, h, hInstance);
+    }
 
     bool Window::GetRenderingContext()
     {
@@ -232,7 +229,11 @@ namespace mope
     void Window::Destroy()
     {
         wglMakeCurrent(NULL, NULL);
+
+        // This is not strictly necessary, because we created the window with the flag CS_OWNDC
+        // This means we have a private device context, which does not need to be released
         ReleaseDC(m_hwnd, m_hdc);
+
         wglDeleteContext(m_hrc);
         PostMessage(m_hwnd, WM_DESTROY, NULL, NULL);
     }
@@ -240,6 +241,11 @@ namespace mope
     bool Window::WantsToClose()
     {
         return bClosing;
+    }
+
+    bool Window::IsBuilt()
+    {
+        return bBuilt;
     }
 
     void Window::SetTitle(LPCSTR title)
@@ -252,79 +258,27 @@ namespace mope
         SetWindowText(m_hwnd, title);
     }
 
-
     void Window::SetDimensions(int w, int h)
     {
         RECT rect = { 0, 0, w, h };
         AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, false);
     }
 
-    void Window::GetDimensions(int* o_w, int* o_h)
+    int_pair Window::GetDimensions()
     {
-        *o_w = clientWidth.load();
-        *o_h = clientHeight.load();
+        return m_dimensions.load();
     }
 
-    float Window::AspectRatio()
+    int_pair Window::GetDeltas()
     {
-        int w, h;
-        GetDimensions(&w, &h);
-        return static_cast<float>(w) / h;
+        return m_deltas.exchange(int_pair{ 0, 0 });
     }
 
     std::array<uint64_t, 2> Window::GetKeyStates()
     {
-        std::array<uint64_t, 2> returnstates{};
-        returnstates[0] = keystates[0].load();
-        returnstates[1] = keystates[1].load();
-        return returnstates;
+        return m_keystates.load();
     }
 
-    int Window::GetXDelta()
-    {
-
-        return xDelta.exchange(0);
-    }
-
-    int Window::GetYDelta()
-    {
-        return yDelta.exchange(0);
-    }
-
-    // Copied directly from
-    // https://learn.microsoft.com/en-us/windows/win32/debug/retrieving-the-last-error-code
-    void Window::ErrorExit(LPCWSTR lpszFunction)
-    {
-        // Retrieve the system error message for the last-error code
-
-        LPVOID lpMsgBuf;
-        LPVOID lpDisplayBuf;
-        DWORD dw = GetLastError();
-
-        FormatMessage(
-            FORMAT_MESSAGE_ALLOCATE_BUFFER |
-            FORMAT_MESSAGE_FROM_SYSTEM |
-            FORMAT_MESSAGE_IGNORE_INSERTS,
-            NULL,
-            dw,
-            MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-            (LPTSTR)&lpMsgBuf,
-            0, NULL);
-
-        // Display the error message and exit the process
-
-        lpDisplayBuf = (LPVOID)LocalAlloc(LMEM_ZEROINIT,
-            (lstrlen((LPCTSTR)lpMsgBuf) + lstrlen(lpszFunction) + 40) * sizeof(TCHAR));
-        StringCchPrintf((LPTSTR)lpDisplayBuf,
-            LocalSize(lpDisplayBuf) / sizeof(TCHAR),
-            TEXT("%s failed with error %d: %s"),
-            lpszFunction, dw, lpMsgBuf);
-        MessageBox(NULL, (LPCTSTR)lpDisplayBuf, TEXT("Error"), MB_OK);
-
-        LocalFree(lpMsgBuf);
-        LocalFree(lpDisplayBuf);
-        ExitProcess(dw);
-    }
 
     /*========================================================================*\
     |  Window creation                                                         |
@@ -389,8 +343,11 @@ namespace mope
         GetWindowInfo(m_hwnd, &wi);
         GetWindowRect(m_hwnd, &windowRect);
         GetClientRect(m_hwnd, &clientRect);
-        clientWidth = clientRect.right - clientRect.left;
-        clientHeight = clientRect.bottom - clientRect.top;
+
+        m_dimensions.store({
+            clientRect.right - clientRect.left,
+            clientRect.bottom - clientRect.top
+            });
     }
 
     /*========================================================================*\
@@ -403,13 +360,14 @@ namespace mope
         while (GetMessage(&msg, NULL, 0, 0))
         {
             TranslateMessage(&msg);
-            DispatchMessageA(&msg);
+            DispatchMessage(&msg);
         }
     }
 
     LRESULT CALLBACK Window::WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     {
-        Window* pThis = NULL;
+        Window* pThis = nullptr;
+
         // On window creation, save a pointer to the window structure
         if (uMsg == WM_NCCREATE) {
             CREATESTRUCT* pCreate = (CREATESTRUCT*)lParam;
@@ -422,6 +380,7 @@ namespace mope
         else {
             pThis = (Window*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
         }
+
         if (pThis) {
             return pThis->handleMessage(uMsg, wParam, lParam);
         }
@@ -435,14 +394,14 @@ namespace mope
         switch (uMsg)
         {
         case WM_MOUSEMOVE:      handleMouseMove(lParam);    break;
-        case WM_KEYDOWN:        handleKeyDown(wParam);              break;  
-        case WM_KEYUP:          handleKeyUp(wParam);                break;
-        case WM_SIZE:           handleSize(lParam);                 break;
-        case WM_EXITSIZEMOVE:   handleExitSizeMove();               break;
-        case WM_SETFOCUS:       handleSetFocus();                   break;
-        case WM_KILLFOCUS:      handleKillFocus();                  break;
-        case WM_CLOSE:		    handleClose();                      break;
-        case WM_DESTROY:	    PostQuitMessage(0);                 break;
+        case WM_KEYDOWN:        handleKeyDown(wParam);      break;  
+        case WM_KEYUP:          handleKeyUp(wParam);        break;
+        case WM_SIZE:           handleSize(lParam);         break;
+        case WM_EXITSIZEMOVE:   handleExitSizeMove();       break;
+        case WM_SETFOCUS:       handleSetFocus();           break;
+        case WM_KILLFOCUS:      handleKillFocus();          break;
+        case WM_CLOSE:		    handleClose();              break;
+        case WM_DESTROY:	    PostQuitMessage(0);         break;
 
         default: return DefWindowProc(m_hwnd, uMsg, wParam, lParam);
         }
@@ -467,9 +426,11 @@ namespace mope
             int clientMidpointX = (clientRect.right - clientRect.left) / 2;
             int clientMidpointY = (clientRect.bottom - clientRect.top) / 2;
 
-            xDelta += xPos - clientMidpointX;
-            // up is down, the sky is falling
-            yDelta += clientMidpointY - yPos;
+            auto deltas = m_deltas.load();
+            m_deltas.store(std::make_pair<int, int>(
+                deltas.first + xPos - clientMidpointX,
+                deltas.second + clientMidpointY - yPos
+                ));
 
             int clientLeft = wi.rcClient.left;
             int clientTop = wi.rcClient.top;
@@ -487,7 +448,10 @@ namespace mope
             idx++;
             keyId ^= 64;
         }
+
+        auto keystates = m_keystates.load();
         keystates[idx] &= ~(1ui64 << keyId);
+        m_keystates.store(keystates);
     }
 
     void Window::handleKeyDown(WPARAM vk_code)
@@ -498,7 +462,10 @@ namespace mope
             idx++;
             keyId ^= 64;
         }
+
+        auto keystates = m_keystates.load();
         keystates[idx] |= 1ui64 << keyId;
+        m_keystates.store(keystates);
     }
 
     void Window::handleClose()
@@ -508,8 +475,10 @@ namespace mope
 
     void Window::handleSize(LPARAM lparam)
     {
-        clientWidth = LOWORD(lparam);
-        clientHeight = HIWORD(lparam);
+        m_dimensions.store(std::make_pair<int, int>(
+            LOWORD(lparam),
+            HIWORD(lparam)
+            ));
     }
 
     void Window::handleExitSizeMove()
@@ -526,9 +495,8 @@ namespace mope
 
     void Window::handleKillFocus()
     {
-        keystates[0].store(0);
-        keystates[1].store(0);
         ClipCursor(&m_oldClip);
+        m_keystates.store({ 0, 0 });
     }
 }
 #endif //MOPE_WINDOW_IMPL
