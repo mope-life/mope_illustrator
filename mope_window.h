@@ -5,10 +5,11 @@
 
 #pragma once
 
-#include <array>
 #include <utility>
-#include <atomic>
 #include <unordered_map>
+#include <string_view>
+#include <bitset>
+#include <iostream>
 
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
@@ -22,14 +23,49 @@
 #include <strsafe.h>
 
 
+/**
+* KeyType must be statically castable to a uint8_t
+*
+* WindowType requires the following public methods:
+*
+* // builds the window with this title and these dimensions, return true if successful
+* bool build(std::string& name, int& width, int& height);
+*
+* // acquires an OpenGL context in the calling thread, returns true if successful
+* bool acquireContext();
+*
+* // displays the graphics for one frame
+* void swap();
+*
+* // sets the title bar of the window
+* void setTitle(std::string&);
+*
+* // get the client (drawable) dimensions of the window
+* int getWidth();
+* int getHeight();
+*
+* // get the mouse deltas since last call and reset
+* int retrieveXDelta();
+* int retrieveYDelta();
+*
+* // get a bitet representing currently pressed keys
+* // to be indexed using [static_cast<uint8_t>(KeyType)]
+* std::bitset<256> getKeyStates();
+* 
+* // process any messages the window has to handle, return false if ready to quit
+* bool processMessages();
+*
+* // force the window to start quitting
+* void close();
+*/
+
 namespace
 {
-    std::wstring wfromcstr(const char* cstr)
+    std::wstring wfromcstr(const char* cstr, size_t len)
     {
-        size_t len = strlen(cstr);
         wchar_t* buf = new wchar_t[len + 1];
-        size_t returnValue{};
-        mbstowcs_s(&returnValue, buf, len + 1, cstr, len);
+        size_t n_chars{ };
+        mbstowcs_s(&n_chars, buf, len + 1, cstr, len);
         std::wstring wstr(buf);
         delete[] buf;
         return wstr;
@@ -42,83 +78,89 @@ namespace
 
 namespace mope
 {
-    enum class Key {
-        A, B, C, D, E, F, G, H, I, J, K, L, M,
-        N, O, P, Q, R, S, T, U, V, W, X, Y, Z,
-        R0, R1, R2, R3, R4, R5, R6, R7, R8, R9,
-        F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12,
-        RETURN, BACK, INS, DEL, CTRL, ALT, ESC, SHIFT, CAPS,
-        PGUP, PGDN, END, HOME, PAUSE, LEFT, RIGHT, UP, DOWN,
-        TAB, SPACE, PLUS, MINUS, PERIOD, COMMA,
-        OEM_1, OEM_2, OEM_3, OEM_4, OEM_5, OEM_6, OEM_7,
-
-        // opportunities for special queries
-        AlphaNum, Any, None
+    enum class Key : uint8_t {
+        A = 'A', B = 'B', C = 'C', D = 'D', E = 'E', F = 'F', G = 'G', H = 'H', I = 'I',
+        J = 'J', K = 'K', L = 'L', M = 'M', N = 'N', O = 'O', P = 'P', Q = 'Q', R = 'R',
+        S = 'S', T = 'T', U = 'U', V = 'V', W = 'W', X = 'X', Y = 'Y', Z = 'Z',
+        R0 = '0', R1 = '1', R2 = '2', R3 = '3', R4 = '4',
+        R5 = '5', R6 = '6', R7 = '7', R8 = '8', R9 = '9',
+        F1 = VK_F1, F2 = VK_F2, F3 = VK_F3, F4 = VK_F4, F5 = VK_F5, F6 = VK_F6,
+        F7 = VK_F7, F8 = VK_F8, F9 = VK_F9, F10 = VK_F10, F11 = VK_F11, F12 = VK_F12,
+        RETURN = VK_RETURN, BACK = VK_BACK, INS = VK_INSERT, DEL = VK_DELETE,
+        CTRL = VK_CONTROL, ALT = VK_MENU, ESC = VK_ESCAPE, SHIFT = VK_SHIFT, CAPS = VK_CAPITAL,
+        PGUP = VK_PRIOR, PGDN = VK_NEXT, END = VK_END, HOME = VK_HOME, PAUSE = VK_PAUSE,
+        LEFT = VK_LEFT, RIGHT = VK_RIGHT, UP = VK_UP, DOWN = VK_DOWN,
+        TAB = VK_TAB, SPACE = VK_SPACE,
+        PLUS = VK_OEM_PLUS, MINUS = VK_OEM_MINUS, PERIOD = VK_OEM_PERIOD, COMMA = VK_OEM_COMMA,
+        OEM_1 = VK_OEM_1, OEM_2 = VK_OEM_2, OEM_3 = VK_OEM_3, OEM_4 = VK_OEM_4,
+        OEM_5 = VK_OEM_5, OEM_6 = VK_OEM_6, OEM_7 = VK_OEM_8,
     };
-
-    typedef std::pair<int, int> int_pair;
-    typedef std::atomic<int_pair> atomic_int_pair;
 
     class Window
     {
     public:
+        ~Window();
+
         // Creates the window and returns true if successful
-        bool Build(LPCWSTR name, int w, int h, HINSTANCE hInstance = GetModuleHandle(NULL));
-        bool Build(LPCSTR name, int w, int h, HINSTANCE hInstance = GetModuleHandle(NULL));
+        bool build(LPCWSTR name, int w, int h, HINSTANCE hInstance = GetModuleHandle(NULL));
+        bool build(std::string_view name, int w, int h, HINSTANCE hInstance = GetModuleHandle(NULL));
 
-        // Must be called on the rendering thread before making any OpenGL calls
-        bool GetRenderingContext();
+        // Display graphics
+        void swap();
 
-        void MessageLoop();
-        void Swap();
-        void Destroy();
-
-        // Returns true only after the user has clicked the big red X
-        bool WantsToClose();
-
-        // Returns true if the window and rendering context has been created
-        bool IsBuilt();
-
-        // Callback for Windows event handling
-        static LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+        // Process any messages in the queue, return false when it's time start quitting (on WM_CLOSE)
+        bool processMessages();
 
         // Makes the given string the title of the window
-        void SetTitle(LPCWSTR title);
-        void SetTitle(LPCSTR title);
+        void setTitle(LPCWSTR title);
+        void setTitle(std::string_view title);
 
-        void SetDimensions(int w, int h);
+        // get size of client area
+        int getWidth();
+        int getHeight();
 
-        int_pair GetDimensions();
-        int_pair GetDeltas();
-        std::array<uint64_t, 2> GetKeyStates();
+        // get the mouse deltas since last call and reset
+        int retrieveXDelta();
+        int retrieveYDelta();
+
+        // get a bitet representing currently pressed keys
+        // to be indexed using [static_cast<uint8_t>(KeyType)]
+        std::bitset<256> getKeyStates();
+
+        // Start quitting
+        void close();
+
+        // get an OpenGL context in the calling thread
+        bool acquireContext();
 
     private:
-        LPCWSTR windowClass = L"mope";
+        LPCWSTR m_windowClass = L"mope";
         HWND m_hwnd = NULL;
         HGLRC m_hrc = NULL;
         HDC m_hdc = NULL;
-
-        bool bBuilt = false;
-        bool bClosing = false;
         
         // Old cursor clip rectangle before the application gets focus
         // Should be restored when the application loses focus
         RECT m_oldClip{};
 
         // all set at first call to handleSize
-        WINDOWINFO wi{ sizeof(WINDOWINFO) };
-        RECT windowRect;
-        RECT clientRect;
+        WINDOWINFO m_wi{ sizeof(WINDOWINFO) };
+        RECT m_windowRect;
+        RECT m_clientRect;
 
-        atomic_int_pair m_dimensions{ std::make_pair<int, int>(0, 0) };
-        atomic_int_pair m_deltas{ std::make_pair<int, int>(0, 0) };
-        std::atomic<std::array<uint64_t, 2>> m_keystates{ { 0, 0 } };
-        static std::unordered_map<unsigned int, uint8_t> keymap;
+        int m_width;
+        int m_height;
+        int m_deltaX;
+        int m_deltaY;
+        std::bitset<256> m_keystates{ };
 
         ATOM registerClass(HINSTANCE hInstance);
         HWND createWindow(LPCWSTR, HINSTANCE, int w, int h);
         HGLRC createRenderingContext();
         void updateSize();
+
+        // Callback for Windows event handling
+        static LRESULT CALLBACK windowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
         // Most Windows event handling is delegated to this...
         LRESULT handleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -145,138 +187,90 @@ namespace mope
 
 namespace mope
 {
-    std::unordered_map<unsigned int, uint8_t> Window::keymap{
-        // Alphanumeric:
-        {0x41u, (uint8_t)Key::A},   {0x42u, (uint8_t)Key::B},   {0x43u, (uint8_t)Key::C},
-        {0x44u, (uint8_t)Key::D},   {0x45u, (uint8_t)Key::E},   {0x46u, (uint8_t)Key::F},
-        {0x47u, (uint8_t)Key::G},   {0x48u, (uint8_t)Key::H},   {0x49u, (uint8_t)Key::I},
-        {0x4Au, (uint8_t)Key::J},   {0x4Bu, (uint8_t)Key::K},   {0x4Cu, (uint8_t)Key::L},
-        {0x4Du, (uint8_t)Key::M},   {0x4Eu, (uint8_t)Key::N},   {0x4Fu, (uint8_t)Key::O},
-        {0x50u, (uint8_t)Key::P},   {0x51u, (uint8_t)Key::Q},   {0x52u, (uint8_t)Key::R},
-        {0x53u, (uint8_t)Key::S},   {0x54u, (uint8_t)Key::T},   {0x55u, (uint8_t)Key::U},
-        {0x56u, (uint8_t)Key::V},   {0x57u, (uint8_t)Key::W},   {0x58u, (uint8_t)Key::X},
-        {0x59u, (uint8_t)Key::Y},   {0x5Au, (uint8_t)Key::Z},
-        {0x30u, (uint8_t)Key::R0},  {0x31u, (uint8_t)Key::R1},  {0x32u, (uint8_t)Key::R2},
-        {0x33u, (uint8_t)Key::R3},  {0x34u, (uint8_t)Key::R4},  {0x35u, (uint8_t)Key::R5},
-        {0x36u, (uint8_t)Key::R6},  {0x37u, (uint8_t)Key::R7},  {0x38u, (uint8_t)Key::R8},
-        {0x39u, (uint8_t)Key::R9},
-        // Function Keys:
-        {0x70u, (uint8_t)Key::F1},  {0x71u, (uint8_t)Key::F2},  {0x72u, (uint8_t)Key::F3},
-        {0x73u, (uint8_t)Key::F4},  {0x74u, (uint8_t)Key::F5},  {0x75u, (uint8_t)Key::F6},
-        {0x76u, (uint8_t)Key::F7},  {0x77u, (uint8_t)Key::F8},  {0x78u, (uint8_t)Key::F9},
-        {0x79u, (uint8_t)Key::F10}, {0x7Au, (uint8_t)Key::F11}, {0x7Bu, (uint8_t)Key::F12},
-        // Other:
-        {0x1Bu, (uint8_t)Key::ESC},     {0x0Du, (uint8_t)Key::RETURN},
-        {0x2Du, (uint8_t)Key::INS},     {0x13u, (uint8_t)Key::PAUSE},
-        {0x2Eu, (uint8_t)Key::DEL},     {0x08u, (uint8_t)Key::BACK},
-        {0x10u, (uint8_t)Key::SHIFT},   {0x14u, (uint8_t)Key::CAPS},
-        {0x11u, (uint8_t)Key::CTRL},    {0x12u, (uint8_t)Key::ALT},
-        {0x23u, (uint8_t)Key::END},     {0x24u, (uint8_t)Key::HOME},
-        {0x21u, (uint8_t)Key::PGUP},    {0x22u, (uint8_t)Key::PGDN},
-        {0x25u, (uint8_t)Key::LEFT},    {0x27u, (uint8_t)Key::RIGHT},
-        {0x26u, (uint8_t)Key::UP},      {0x28u, (uint8_t)Key::DOWN},
-        {0x09u, (uint8_t)Key::TAB},     {0x20u, (uint8_t)Key::SPACE},
-        {0xBBu, (uint8_t)Key::PLUS},    {0xBDu, (uint8_t)Key::MINUS},
-        {0xBCu, (uint8_t)Key::COMMA},   {0xBEu, (uint8_t)Key::PERIOD},
-        // OEM specific q.v. https://docs.microsoft.com/en-us/windows/win32/inputdev/virtual-key-codes
-        {0xBAu, (uint8_t)Key::OEM_1},   {0xBFu, (uint8_t)Key::OEM_2},
-        {0xC0u, (uint8_t)Key::OEM_3},   {0xDBu, (uint8_t)Key::OEM_4},
-        {0xDCu, (uint8_t)Key::OEM_5},   {0xDDu, (uint8_t)Key::OEM_6},
-        {0xDEu, (uint8_t)Key::OEM_7}
-    };
-
-    /*========================================================================*\
-    |  API                                                                     |
-    \*========================================================================*/
-
-    bool Window::Build(LPCWSTR lpWindowName, int w, int h, HINSTANCE hInstance)
+    Window::~Window()
     {
-        // buildKeymap();
-        bBuilt =
-            // class atom != 0
+        wglMakeCurrent(NULL, NULL);
+        wglDeleteContext(m_hrc);
+
+        // now that the context is deleted, we can destroy the window
+        DestroyWindow(m_hwnd);
+    }
+
+    bool Window::build(LPCWSTR lpWindowName, int w, int h, HINSTANCE hInstance)
+    {
+        bool built =
             (registerClass(hInstance) != 0)
-            // m_hwnd != NULL
             && (m_hwnd = createWindow(lpWindowName, hInstance, w, h)) != NULL
-            // m_hdc != NULL
             && (m_hdc = GetDC(m_hwnd)) != NULL
-            // m_hrc != NULL
             && (m_hrc = createRenderingContext()) != NULL;
 
-        if (bBuilt) {
+        if (built) {
             ShowWindow(m_hwnd, SW_SHOWDEFAULT);
             ShowCursor(FALSE);
             updateSize();
         }
 
-        return bBuilt;
+        return built;
     }
 
-    bool Window::Build(LPCSTR name, int w, int h, HINSTANCE hInstance)
+    bool Window::build(std::string_view name, int w, int h, HINSTANCE hInstance)
     {
-        return Build(wfromcstr(name).c_str(), w, h, hInstance);
+        return build(wfromcstr(name.data(), name.length()).c_str(), w, h, hInstance);
     }
 
-    bool Window::GetRenderingContext()
+    bool Window::acquireContext()
     {
         return wglMakeCurrent(m_hdc, m_hrc) == TRUE;
     }
 
-    void Window::Swap()
+    void Window::swap()
     {
         SwapBuffers(m_hdc);
     }
 
-    void Window::Destroy()
-    {
-        wglMakeCurrent(NULL, NULL);
-
-        // This is not strictly necessary, because we created the window with the flag CS_OWNDC
-        // This means we have a private device context, which does not need to be released
-        ReleaseDC(m_hwnd, m_hdc);
-
-        wglDeleteContext(m_hrc);
-        PostMessage(m_hwnd, WM_DESTROY, NULL, NULL);
-    }
-
-    bool Window::WantsToClose()
-    {
-        return bClosing;
-    }
-
-    bool Window::IsBuilt()
-    {
-        return bBuilt;
-    }
-
-    void Window::SetTitle(LPCSTR title)
-    {
-        SetTitle(wfromcstr(title).c_str());
-    }
-
-    void Window::SetTitle(LPCWSTR title)
+    // Makes the given string the title of the window
+    void Window::setTitle(LPCWSTR title)
     {
         SetWindowText(m_hwnd, title);
     }
 
-    void Window::SetDimensions(int w, int h)
+    void Window::setTitle(std::string_view title)
     {
-        RECT rect = { 0, 0, w, h };
-        AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, false);
+        setTitle(wfromcstr(title.data(), title.length()).c_str());
     }
 
-    int_pair Window::GetDimensions()
+    int Window::getWidth()
     {
-        return m_dimensions.load();
+        return m_width;
     }
 
-    int_pair Window::GetDeltas()
+    int Window::getHeight()
     {
-        return m_deltas.exchange(int_pair{ 0, 0 });
+        return m_height;
     }
 
-    std::array<uint64_t, 2> Window::GetKeyStates()
+    int Window::retrieveXDelta()
     {
-        return m_keystates.load();
+        int result = m_deltaX;
+        m_deltaX = 0;
+        return result;
+    }
+
+    int Window::retrieveYDelta()
+    {
+        int result = m_deltaY;
+        m_deltaY = 0;
+        return result;
+    }
+
+    std::bitset<256> Window::getKeyStates()
+    {
+        return m_keystates;
+    }
+
+    void Window::close()
+    {
+        PostMessage(m_hwnd, WM_CLOSE, NULL, NULL);
     }
 
 
@@ -286,16 +280,17 @@ namespace mope
 
     ATOM Window::registerClass(HINSTANCE hInstance)
     {
-        WNDCLASSEX wcx{}, gwc{};
-        if (GetClassInfoEx(hInstance, windowClass, &gwc))
+        WNDCLASSEX wcx{ }, gwc{ };
+        if (GetClassInfoEx(hInstance, m_windowClass, &gwc))
         {
-            UnregisterClass(windowClass, hInstance);
+            // class already exists - we must have already registered it
+            return TRUE;
         }
 
         wcx.cbSize = sizeof(WNDCLASSEX);
         wcx.style = CS_OWNDC | CS_HREDRAW | CS_VREDRAW;
-        wcx.lpfnWndProc = Window::WindowProc;
-        wcx.lpszClassName = windowClass;
+        wcx.lpfnWndProc = Window::windowProc;
+        wcx.lpszClassName = m_windowClass;
         wcx.hbrBackground = NULL;
 
         return RegisterClassEx(&wcx);
@@ -316,7 +311,7 @@ namespace mope
         HMENU hMenu = NULL;
 
         return CreateWindowEx(
-            dwExStyle, windowClass, lpWindowName, dwStyle,
+            dwExStyle, m_windowClass, lpWindowName, dwStyle,
             x, y, width, height, hWndParent, hMenu, hInstance, this
         );
     }
@@ -340,31 +335,37 @@ namespace mope
 
     void Window::updateSize()
     {
-        GetWindowInfo(m_hwnd, &wi);
-        GetWindowRect(m_hwnd, &windowRect);
-        GetClientRect(m_hwnd, &clientRect);
+        GetWindowInfo(m_hwnd, &m_wi);
+        GetWindowRect(m_hwnd, &m_windowRect);
+        GetClientRect(m_hwnd, &m_clientRect);
 
-        m_dimensions.store({
-            clientRect.right - clientRect.left,
-            clientRect.bottom - clientRect.top
-            });
+        m_width = m_clientRect.right - m_clientRect.left;
+        m_height = m_clientRect.bottom - m_clientRect.top;
     }
 
     /*========================================================================*\
     |  Message Loop and Callbacks                                              |
     \*========================================================================*/
     
-    void Window::MessageLoop()
+    bool Window::processMessages()
     {
-        MSG msg = {};
-        while (GetMessage(&msg, NULL, 0, 0))
+        MSG msg{ };
+
+        while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE))
         {
             TranslateMessage(&msg);
             DispatchMessage(&msg);
+
+            if (msg.message == WM_CLOSE)
+            {
+                return false;
+            }
         }
+
+        return true;
     }
 
-    LRESULT CALLBACK Window::WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+    LRESULT CALLBACK Window::windowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     {
         Window* pThis = nullptr;
 
@@ -401,7 +402,6 @@ namespace mope
         case WM_SETFOCUS:       handleSetFocus();           break;
         case WM_KILLFOCUS:      handleKillFocus();          break;
         case WM_CLOSE:		    handleClose();              break;
-        case WM_DESTROY:	    PostQuitMessage(0);         break;
 
         default: return DefWindowProc(m_hwnd, uMsg, wParam, lParam);
         }
@@ -413,27 +413,26 @@ namespace mope
     {
         // Since we set cursor pos again in this method, we guard against infinite recursion
         static bool setFlag = false;
-        if (setFlag) {
+        if (setFlag)
+        {
             setFlag = false;
         }
-        else {
+        else
+        {
             setFlag = true;
 
             // relative to client area
             WORD xPos = LOWORD(lparam);
             WORD yPos = HIWORD(lparam);
 
-            int clientMidpointX = (clientRect.right - clientRect.left) / 2;
-            int clientMidpointY = (clientRect.bottom - clientRect.top) / 2;
+            int clientMidpointX = (m_clientRect.right - m_clientRect.left) / 2;
+            int clientMidpointY = (m_clientRect.bottom - m_clientRect.top) / 2;
 
-            auto deltas = m_deltas.load();
-            m_deltas.store(std::make_pair<int, int>(
-                deltas.first + xPos - clientMidpointX,
-                deltas.second + clientMidpointY - yPos
-                ));
+            m_deltaX += xPos - clientMidpointX;
+            m_deltaY += clientMidpointY - yPos;
 
-            int clientLeft = wi.rcClient.left;
-            int clientTop = wi.rcClient.top;
+            int clientLeft = m_wi.rcClient.left;
+            int clientTop = m_wi.rcClient.top;
 
             // NOT relative to client area
             SetCursorPos(clientLeft + clientMidpointX, clientTop + clientMidpointY);
@@ -442,43 +441,23 @@ namespace mope
 
     void Window::handleKeyUp(WPARAM vk_code)
     {
-        uint8_t keyId = keymap[(unsigned int)vk_code];
-        size_t idx = 0;
-        if (keyId & 64) { // this works because keyId < 128
-            idx++;
-            keyId ^= 64;
-        }
-
-        auto keystates = m_keystates.load();
-        keystates[idx] &= ~(1ui64 << keyId);
-        m_keystates.store(keystates);
+        m_keystates.reset(vk_code);
     }
 
     void Window::handleKeyDown(WPARAM vk_code)
     {
-        uint8_t keyId = keymap[(unsigned int)vk_code];
-        size_t idx = 0;
-        if (keyId & 64) { // this works because keyId < 128
-            idx++;
-            keyId ^= 64;
-        }
-
-        auto keystates = m_keystates.load();
-        keystates[idx] |= 1ui64 << keyId;
-        m_keystates.store(keystates);
+        m_keystates.set(vk_code);
     }
 
     void Window::handleClose()
     {
-        bClosing = true;
+        // nothing to do, handled in destructor
     }   
 
     void Window::handleSize(LPARAM lparam)
     {
-        m_dimensions.store(std::make_pair<int, int>(
-            LOWORD(lparam),
-            HIWORD(lparam)
-            ));
+        m_width = LOWORD(lparam);
+        m_height = HIWORD(lparam);
     }
 
     void Window::handleExitSizeMove()
@@ -490,13 +469,13 @@ namespace mope
     {
         updateSize();
         GetClipCursor(&m_oldClip);
-        ClipCursor(&wi.rcClient);
+        ClipCursor(&m_wi.rcClient);
     }
 
     void Window::handleKillFocus()
     {
         ClipCursor(&m_oldClip);
-        m_keystates.store({ 0, 0 });
+        m_keystates.reset();
     }
 }
 #endif //MOPE_WINDOW_IMPL
