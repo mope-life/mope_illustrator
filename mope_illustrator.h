@@ -1,8 +1,10 @@
-/*
-* To use, #define MOPE_ILLUSTRATOR_IMPL before the #include in exactly one of your source files.
-*/
+#ifndef MOPE_ILLUSTRATOR_H
+#define MOPE_ILLUSTRATOR_H
 
-#pragma once
+/*
+    To use, #define MOPE_ILLUSTRATOR_IMPL before the #include in exactly one of
+    your source files.
+*/
 
 #include <chrono>
 #include <thread>
@@ -20,12 +22,6 @@
 
 #include <GL/GL.h>
 #pragma comment(lib, "opengl32.lib")
-
-// cruft
-#pragma push_macro("near")
-#pragma push_macro("far")
-#undef near
-#undef far
 
 // We define OpenGL junk and load up extensions (this replaces a more rigorous
 // extension loader--such as GLEW--for my limited purposes)
@@ -183,14 +179,14 @@ namespace mope
             const float right,
             const float bottom,
             const float top,
-            const float near,
-            const float far
+            const float nr,
+            const float fr
         );
         mat4f perspective(
             const float fov,
             const float aspect,
-            const float near,
-            const float far
+            const float nr,
+            const float fr
         );
     }
 
@@ -454,8 +450,8 @@ namespace mope
 
         void AddInstance(std::shared_ptr<Instance> instance);
         std::shared_ptr<Instance> MakeInstance(
-            vec3f position = { 0.f, 0.f, -1.f },
-            vec3f scale = { 1.f, 1.f, 1.f },
+            vec3f position = vec3f{ 0.f, 0.f, -1.f },
+            vec3f scale = vec3f{ 1.f, 1.f, 1.f },
             float rotation = 0
         );
 
@@ -480,16 +476,54 @@ namespace mope
     |  Illustrator                                                             |
     \*========================================================================*/
 
+    /*
+    * Window is required to define the following API:
+    */
+
+    class BaseRenderer
+    {
+    public:
+        // Display graphics
+        virtual void showFrame() = 0;
+    };
+
+    class BaseWindow
+    {
+    public:
+        // Retrieve an abstract object that represents control of a rendering context
+        virtual std::unique_ptr<BaseRenderer> getRenderer() = 0;
+
+        // Makes the given string the title of the window
+        virtual void setTitle(std::string_view title) = 0;
+
+        // get size of client area
+        virtual int getWidth() = 0;
+        virtual int getHeight() = 0;
+
+        // get the mouse deltas since last call and reset
+        virtual int retrieveXDelta() = 0;
+        virtual int retrieveYDelta() = 0;
+
+        // get a bitet representing currently pressed keys
+        virtual std::bitset<256> getKeyStates() = 0;
+
+        // return false to stop the app
+        virtual bool running() = 0;
+
+        // force window to start closing
+        virtual void close() = 0;
+    };
+
     class IllustratorCore
     {
     public:
-        IllustratorCore(const std::string& title);
-        virtual ~IllustratorCore() = default;
-
         // start this puppy going
         void run();
 
     protected:
+        IllustratorCore(std::unique_ptr<BaseWindow> window, std::string_view title);
+        virtual ~IllustratorCore() = default;
+
         // Set OpengGl clear color using bytes in range [0-255] for RGBA
         void setClearColor(Pixel color);
 
@@ -508,13 +542,12 @@ namespace mope
         // Get the current dimensions of the screen client area
         vec2i clientDims();
 
-        // Get various states of keys by id
-        bool pressed(uint8_t key_id);
-        bool held(uint8_t key_id);
-        bool released(uint8_t key_id);
-
-        //
         Shader defaultShader{ };
+
+        // Internal representation of keystates
+        std::bitset<256> m_pressed{ };
+        std::bitset<256> m_released{ };
+        std::bitset<256> m_held{ };
 
     private:
         // User should override this to do stuff to prepare for rendering.
@@ -532,27 +565,20 @@ namespace mope
         // The main driver of activity
         void coreLoop();
 
-        // Callbacks that must be implemented to communicate with window class
-        virtual void acquireContext() = 0;
-        virtual void showFrame() = 0;
-        virtual bool processMessages() = 0;
-        virtual void updateTitle(std::string_view title) = 0;
-        virtual std::bitset<256> getKeyStates() = 0;
-        virtual void getMouseDeltas(int& width, int& height) = 0;
-        virtual void getDimensions(int& width, int& height) = 0;
-        virtual void close() = 0;
+        // Updates during loop
+        void updateSize(bool initial = false);
+        void updateTitle();
+        void updateInputs();
+
+        // access to the window that we are working with
+        std::unique_ptr<BaseWindow> m_window;
 
         // current usable width and height of window
         int m_width{ 0 };
         int m_height{ 0 };
 
-        // gets a good value after window is built
-        float m_initialAspect{ };
-
-        // Internal representation of keystates
-        std::bitset<256> m_pressed{ };
-        std::bitset<256> m_released{ };
-        std::bitset<256> m_held{ };
+        // once set, try to maintain this aspect ratio
+        float m_initialAspect{ 0 };
 
         // x and y deltas of mouse on last frame
         int m_xDelta{ 0 };
@@ -562,151 +588,45 @@ namespace mope
         unsigned int m_frameCount{ 0 };
         double m_frameTime{ 0 };
         double m_fpsUpdateTimer{ 0 };
-        bool m_showFps{ false };
+        bool m_showFps{ true };
 
         // title of the game/window, defined in constructor
         const std::string m_title;
     };
 
-    /**
-    * KeyType must be statically castable to a uint8_t
-    *
-    * WindowType requires the following public methods:
-    *
-    * // builds the window with this title and these dimensions, return true if successful
-    * bool build(std::string& name, int& width, int& height);
-    *
-    * // acquires an OpenGL context in the calling thread, returns true if successful
-    * bool acquireContext();
-    *
-    * // displays the graphics for one frame
-    * void swap();
-    *
-    * // sets the title bar of the window
-    * void setTitle(std::string_view&);
-    *
-    * // get the client (drawable) dimensions of the window
-    * int getWidth();
-    * int getHeight();
-    *
-    * // get the mouse deltas since last call and reset
-    * int retrieveXDelta();
-    * int retrieveYDelta();
-    * 
-    * // get a bitet representing currently pressed keys
-    * // to be indexed using [static_cast<uint8_t>(KeyType)]
-    * std::bitset<256> getKeyStates();
-    * 
-    * // process any messages the window has to handle, return false if ready to close
-    * bool processMessages();
-    *
-    * // force the window to start closing
-    * void close();
+    /*
+    *   KeyType must be statically castable to a uint8_t.
     */
-    template <class WindowType, class KeyType>
+    template <class KeyT>
     class Illustrator : public IllustratorCore
     {
     public:
-        Illustrator(WindowType& window, const std::string& title, const vec2i& window_dims);
+        using IllustratorCore::IllustratorCore;
 
     protected:
-        // Get various states of keys by some KeyType
-        bool pressed(KeyType k);
-        bool held(KeyType k);
-        bool released(KeyType k);
+        bool pressed(KeyT k)
+        {
+            return m_pressed[static_cast<uint8_t>(k)];
+        }
+
+        bool held(KeyT k)
+        {
+            return m_held[static_cast<uint8_t>(k)];
+        }
+
+        bool released(KeyT k)
+        {
+            return m_released[static_cast<uint8_t>(k)];
+        }
 
     private:
-        std::reference_wrapper<WindowType> m_window;
-
-        void acquireContext() override;
-        void showFrame() override;
-        bool processMessages() override;
-        void updateTitle(std::string_view title) override;
-        std::bitset<256> getKeyStates() override;
-        void getMouseDeltas(int& x, int& y) override;
-        void getDimensions(int& width, int& height) override;
-        void close() override;
+        using IllustratorCore::m_pressed;
+        using IllustratorCore::m_held;
+        using IllustratorCore::m_released;
     };
-
-    template<class WindowType, class KeyType>
-    inline Illustrator<WindowType, KeyType>::Illustrator(
-        WindowType& window, const std::string& title, const vec2i& window_dims
-    )
-        : IllustratorCore{ title }
-        , m_window{ window }
-    {
-        window.build(title, window_dims.x(), window_dims.y());
-    }
-
-    template<class WindowType, class KeyType>
-    inline bool Illustrator<WindowType, KeyType>::pressed(KeyType k)
-    {
-        return IllustratorCore::pressed(static_cast<uint8_t>(k));
-    }
-
-    template<class WindowType, class KeyType>
-    inline bool Illustrator<WindowType, KeyType>::held(KeyType k)
-    {
-        return IllustratorCore::held(static_cast<uint8_t>(k));
-    }
-
-    template<class WindowType, class KeyType>
-    inline bool Illustrator<WindowType, KeyType>::released(KeyType k)
-    {
-        return IllustratorCore::released(static_cast<uint8_t>(k));
-    }
-
-    template<class WindowType, class KeyType>
-    inline void Illustrator<WindowType, KeyType>::acquireContext()
-    {
-        m_window.get().acquireContext();
-    }
-
-    template<class WindowType, class KeyType>
-    inline void Illustrator<WindowType, KeyType>::showFrame()
-    {
-        m_window.get().swap();
-    }
-
-    template<class WindowType, class KeyType>
-    inline void Illustrator<WindowType, KeyType>::updateTitle(std::string_view title)
-    {
-        m_window.get().setTitle(title);
-    }
-
-    template<class WindowType, class KeyType>
-    inline std::bitset<256> Illustrator<WindowType, KeyType>::getKeyStates()
-    {
-        return m_window.get().getKeyStates();
-    }
-
-    template<class WindowType, class KeyType>
-    inline void Illustrator<WindowType, KeyType>::getMouseDeltas(int& x, int& y)
-    {
-        x = m_window.get().retrieveXDelta();
-        y = m_window.get().retrieveYDelta();
-    }
-
-    template<class WindowType, class KeyType>
-    inline void Illustrator<WindowType, KeyType>::getDimensions(int& width, int& height)
-    {
-        width = m_window.get().getWidth();
-        height = m_window.get().getHeight();
-    }
-
-    template<class WindowType, class KeyType>
-    inline bool Illustrator<WindowType, KeyType>::processMessages()
-    {
-        return m_window.get().processMessages();
-    }
-
-    template<class WindowType, class KeyType>
-    inline void Illustrator<WindowType, KeyType>::close()
-    {
-        m_window.get().close();
-    }
 }
 
+#endif // MOPE_ILLUSTRATOR_H
 
 #ifdef MOPE_ILLUSTRATOR_IMPL
 #undef MOPE_ILLUSTRATOR_IMPL
@@ -715,91 +635,91 @@ namespace mope
 |  Implementation                                                              |
 \*============================================================================*/
 
-#define GL_PROC(type, name, ...) name##_t* name;
-    GL_PROC_LIST
+#define GL_PROC(type, name, ...) static name##_t* name;
+GL_PROC_LIST
 #undef GL_PROC
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
 namespace mope::gl
+{
+    void BindProcs()
     {
-        void BindProcs()
-        {
 #define GL_PROC(type, name, ...) name = (name##_t*)getProcAddress(#name);
-            GL_PROC_LIST
+        GL_PROC_LIST
 #undef GL_PROC
-        }
+    }
 
-        void PrintErrors(const char* location)
-        {
-            GLenum err;
-            while ((err = glGetError()) != GL_NO_ERROR) {
-                fprintf(stdout, "Error arose at %s. Code: 0x%04x\n", location, err);
-            }
-        }
-
-        constexpr mat4f translation(const vec3f& offsets)
-        {
-            mat4f res = mat4f::identity();
-            for (size_t i = 0; i < 3; ++i) {
-                res[3][i] = offsets[i];
-            }
-            return res;
-        }
-
-        constexpr mat4f scale(const vec3f& factors)
-        {
-            mat4f res = mat4f::identity();
-            for (size_t i = 0; i < 3; ++i) {
-                res[i][i] = factors[i];
-            }
-            return res;
-        }
-
-        constexpr mat4f ortho(
-            const float left, const float right,
-            const float bottom, const float top,
-            const float near, const float far
-        ) {
-            const vec3f offsets{ -(right + left) / 2.f, -(top + bottom) / 2.f, -(far + near) / 2.f };
-            const mat4f T = translation(offsets);
-
-            const vec3f factors{ 2.f / (right - left), 2.f / (top - bottom), 2.f / (far - near) };
-            const mat4f S = scale(factors);
-
-            return S * T;
-        }
-
-        mat4f perspective(
-            const float fov, const float aspect,
-            const float near, const float far
-        ) {
-            float top = near * tan(fov / 2.f);
-            float right = aspect * top;
-
-            return {
-                near / right, 0.f, 0.f, 0.f,
-                0.f, near / top, 0.f, 0.f,
-                0.f, 0.f, (far + near) / (near - far), -1.f,
-                0.f, 0.f, 2.f * far * near / (near - far), 0.f
-            };
+    void PrintErrors(const char* location)
+    {
+        GLenum err;
+        while ((err = glGetError()) != GL_NO_ERROR) {
+            fprintf(stdout, "Error arose at %s. Code: 0x%04x\n", location, err);
         }
     }
 
+    constexpr mat4f translation(const vec3f& offsets)
+    {
+        mat4f res = mat4f::identity();
+        for (size_t i = 0; i < 3; ++i) {
+            res[3][i] = offsets[i];
+        }
+        return res;
+    }
+
+    constexpr mat4f scale(const vec3f& factors)
+    {
+        mat4f res = mat4f::identity();
+        for (size_t i = 0; i < 3; ++i) {
+            res[i][i] = factors[i];
+        }
+        return res;
+    }
+
+    constexpr mat4f ortho(
+        const float left, const float right,
+        const float bottom, const float top,
+        const float nr, const float fr
+    ) {
+        const vec3f offsets{ -(right + left) / 2.f, -(top + bottom) / 2.f, -(fr + nr) / 2.f };
+        const mat4f T = translation(offsets);
+
+        const vec3f factors{ 2.f / (right - left), 2.f / (top - bottom), 2.f / (fr - nr) };
+        const mat4f S = scale(factors);
+
+        return S * T;
+    }
+
+    mat4f perspective(
+        const float fov, const float aspect,
+        const float nr, const float fr
+    ) {
+        float top = nr * tan(fov / 2.f);
+        float right = aspect * top;
+
+        return {
+            nr / right, 0.f, 0.f, 0.f,
+            0.f, nr / top, 0.f, 0.f,
+            0.f, 0.f, (fr + nr) / (nr - fr), -1.f,
+            0.f, 0.f, 2.f * fr * nr / (nr - fr), 0.f
+        };
+    }
+}
+
 namespace mope
 {
-    /*========================================================================*\
-    |  Main Illustrator API                                                    |
-    \*========================================================================*/
-
-    IllustratorCore::IllustratorCore(const std::string& title)
-        : m_title{ title }
+    IllustratorCore::IllustratorCore(std::unique_ptr<BaseWindow> window, std::string_view title)
+        : m_window{ std::move(window) }
+        , m_title{ title }
     { }
 
     void IllustratorCore::run()
     {
-        coreLoop();
+        if (m_window->running())
+        {
+            coreLoop();
+        }
     }
 
     void IllustratorCore::setClearColor(Pixel color)
@@ -822,15 +742,74 @@ namespace mope
     {
         m_showFps = !m_showFps;
         if (m_showFps) {
-            int fps = (int)(m_frameCount / m_fpsUpdateTimer);
-            m_frameCount = 0;
-            m_fpsUpdateTimer = 0;
-            std::string strFps = m_title + " FPS: " + std::to_string(fps);
-            updateTitle(strFps);
+            updateTitle();
         }
         else {
-            updateTitle(m_title);
+            m_window->setTitle(m_title);
+            m_frameCount = 0;
+            m_fpsUpdateTimer = 0.0;
         }
+    }
+
+    void IllustratorCore::updateSize(bool initial)
+    {
+        // get current window size
+        int new_width = m_window->getWidth();
+        int new_height = m_window->getHeight();
+
+        // make changes only if the window size has changed
+        if (new_width != m_width || new_height != m_height) {
+            m_width = new_width;
+            m_height = new_height;
+
+            // try to maintain original aspect ratio and keep the viewport centered
+            float new_aspect = static_cast<float>(m_width) / m_height;
+            if (initial)
+            {
+                m_initialAspect = new_aspect;
+            }
+
+            if (new_aspect > m_initialAspect)
+            {
+                int calc_width = static_cast<int>(m_height * m_initialAspect);
+                int x = (m_width - calc_width) / 2;
+                glViewport(x, 0, calc_width, m_height);
+            }
+            else if (new_aspect < m_initialAspect)
+            {
+                int calc_height = static_cast<int>(m_width / m_initialAspect);
+                int y = (m_height - calc_height) / 2;
+                glViewport(0, y, m_width, calc_height);
+            }
+            else
+            {
+                glViewport(0, 0, m_width, m_height);
+            }
+        }
+    }
+
+    void IllustratorCore::updateTitle()
+    {
+        if (m_showFps) {
+            m_fpsUpdateTimer += m_frameTime;
+            m_frameCount++;
+            if (m_fpsUpdateTimer > 1.0) {
+                m_window->setTitle(m_title + " FPS: " + std::to_string(m_frameCount));
+                m_fpsUpdateTimer -= 1.0;
+                m_frameCount = 0;
+            }
+        }
+    }
+
+    void IllustratorCore::updateInputs()
+    {
+        m_xDelta = m_window->retrieveXDelta();
+        m_yDelta = m_window->retrieveYDelta();
+
+        auto new_states = m_window->getKeyStates();
+        m_pressed = new_states & ~m_held;
+        m_released = m_held & ~new_states;
+        m_held = new_states;
     }
 
     vec2i IllustratorCore::mouseDeltas()
@@ -841,21 +820,6 @@ namespace mope
     vec2i IllustratorCore::clientDims()
     {
         return { m_width, m_height };
-    }
-
-    bool IllustratorCore::pressed(uint8_t key_id)
-    {
-        return m_pressed[key_id];
-    }
-
-    bool IllustratorCore::held(uint8_t key_id)
-    {
-        return m_held[key_id];
-    }
-
-    bool IllustratorCore::released(uint8_t key_id)
-    {
-        return m_released[key_id];
     }
 
     bool IllustratorCore::gameStart()
@@ -874,7 +838,9 @@ namespace mope
 
     void IllustratorCore::coreLoop()
     {
-        acquireContext();
+        auto rc = m_window->getRenderer();
+
+        updateSize(true);
 
         gl::BindProcs();
         glEnable(GL_BLEND);
@@ -910,16 +876,12 @@ namespace mope
         defaultShader.SetUniform("u_Projection", mat4f::identity());
         defaultShader.SetUniform("u_View", mat4f::identity());
 
-        getDimensions(m_width, m_height);
-        m_initialAspect = static_cast<float>(m_width) / m_height;
-
         // Give the app a chance to set things up
-        if (gameStart())
-        {
+        if (gameStart()) {
             std::chrono::system_clock::time_point t1 = std::chrono::system_clock::now();
             std::chrono::system_clock::time_point t2;
 
-            while (processMessages())
+            while (m_window->running())
             {
                 // Find out how much time has passsed
                 t2 = std::chrono::system_clock::now();
@@ -927,56 +889,14 @@ namespace mope
                 m_frameTime = durElapsed.count();
                 t1 = t2;
 
-                // Show the fps in the title bar
-                m_fpsUpdateTimer += m_frameTime;
-                m_frameCount++;
-                if (m_fpsUpdateTimer >= 1.0) {
-                    if (m_showFps) {
-                        std::string strFps = m_title + " FPS: " + std::to_string(m_frameCount);
-                        updateTitle(strFps);
-                    }
-                    m_fpsUpdateTimer -= 1;
-                    m_frameCount = 0;
-                }
+                // Do all our regular updates
+                updateTitle();
+                updateSize();
+                updateInputs();
 
-                // get current window size
-                int new_width{ }, new_height{ };
-                getDimensions(new_width, new_height);
-
-                // make changes only if the window size has changed
-                if (new_width != m_width || new_height != m_height) {
-                    m_width = new_width;
-                    m_height = new_height;
-
-                    // try to maintain original aspect ratio and keep the viewport centered
-                    float new_aspect = static_cast<float>(m_width) / m_height;
-                    if (new_aspect > m_initialAspect)
-                    {
-                        int calc_width = static_cast<int>(m_height * m_initialAspect);
-                        int x = (m_width - calc_width) / 2;
-                        glViewport(x, 0, calc_width, m_height);
-                    }
-                    else if (new_aspect < m_initialAspect)
-                    {
-                        int calc_height = static_cast<int>(m_width / m_initialAspect);
-                        int y = (m_height - calc_height) / 2;
-                        glViewport(0, y, m_width, calc_height);
-                    }
-                    else
-                    {
-                        glViewport(0, 0, m_width, m_height);
-                    }
-                }
-
-                getMouseDeltas(m_xDelta, m_yDelta);
-
-                std::bitset<256> new_states = getKeyStates();
-                m_pressed = new_states & ~m_held;
-                m_released = m_held & ~new_states;
-                m_held = new_states;
-
+                // show the frame
                 glClear(GL_COLOR_BUFFER_BIT);
-                gameUpdate(m_frameTime) ? showFrame() : close();
+                gameUpdate(m_frameTime) ? rc->showFrame() : m_window->close();
             }
         }
 
@@ -1150,7 +1070,7 @@ namespace mope
             glGetShaderiv(object, GL_COMPILE_STATUS, &success);
             if (!success) {
                 glGetShaderInfoLog(object, 512, NULL, log);
-                std::cout << "Error arose at shader compilation:\n" << log << std::endl;
+                std::cerr << "Error arose at shader compilation:\n" << log << std::endl;
             }
         }
         else {
@@ -1158,7 +1078,7 @@ namespace mope
             if (!success)
             {
                 glGetProgramInfoLog(object, 512, NULL, log);
-                std::cout << "Error arose at program linking:\n" << log << std::endl;
+                std::cerr << "Error arose at program linking:\n" << log << std::endl;
             }
         }
     }
@@ -1585,5 +1505,3 @@ namespace mope
 }
 
 #endif //MOPE_ILLUSTRATOR_IMPL
-#pragma pop_macro("near")
-#pragma pop_macro("far")
