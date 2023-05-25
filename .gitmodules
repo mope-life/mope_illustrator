@@ -1,4 +1,0 @@
-[submodule "include/mope_vec"]
-	path = mope_vec
-	url = https://github.com/mope-life/mope_vec
-	branch = main
