@@ -18,7 +18,7 @@
 #include <cstring>
 #include <bitset>
 
-#include "mope_vec.hxx"
+#include "mope_vec/mope_vec.hxx"
 
 #include <GL/GL.h>
 #pragma comment(lib, "opengl32.lib")
