@@ -156,12 +156,27 @@ namespace mope
         inline constexpr float ssboResizeFactor = 2.f;
         static_assert(ssboResizeFactor >= 2.f);
 
-        // Size information about the default fontsheet
-        inline constexpr int glyphsPerRow = 16;
-        inline constexpr int glyphRows = 6;
-        inline constexpr vec2i pxGlyphSize = { 16, 32 };
-        inline constexpr vec2i pxFontSheetSize = { pxGlyphSize.x() * glyphsPerRow, pxGlyphSize.y() * glyphRows };
-        inline constexpr float glyphAspect = static_cast<float>(pxGlyphSize.x()) / pxGlyphSize.y();
+        inline constexpr const char* vertextShaderSource =
+            "#version 430 core\n"
+            "uniform mat4 u_Projection;"
+            "uniform mat4 u_View;"
+            "uniform sampler2D u_Texture;"
+            "layout (location = 0) in vec2 i_Vertex;"
+            "layout (location = 1) in vec2 i_TexCoord;"
+            "layout (std430, binding = 0) buffer MatrixBlock { mat4 u_Models[]; };"
+            "out vec2 io_TexCoord;"
+            "void main() {"
+            "mat4 mvp = u_Projection * u_View * u_Models[gl_InstanceID];"
+            "gl_Position = mvp * vec4(i_Vertex, 0.0, 1.0);"
+            "io_TexCoord = i_TexCoord; }";
+
+        inline constexpr const char* fragmentShaderSource =
+            "#version 430 core\n"
+            "uniform sampler2D u_Texture;"
+            "in vec2 io_TexCoord;"
+            "out vec4 o_Color;"
+            "void main() {"
+            "o_Color = texture(u_Texture, io_TexCoord); }";
     }
 
     namespace gl
@@ -298,16 +313,17 @@ namespace mope
         BufferObject(BufferObject&&) noexcept;
         BufferObject& operator=(BufferObject&&) noexcept;
 
-        void Generate();
         void Bind();
+        void Generate();
         void Release();
-        void Allocate(size_t size, const void* data = nullptr);
-        void Fill(size_t size, size_t offset, const void* data);
+        void Fill(const void* data, size_t size, size_t offset = 0);
+        void Allocate(size_t size);
 
         int Id();
 
     private:
         GLuint m_id{ 0 };
+        bool m_allocated{ false };
 
         virtual GLenum target() = 0;
         virtual GLenum usage() = 0;
@@ -329,6 +345,10 @@ namespace mope
 
     class SSBO : public BufferObject
     {
+    public:
+        // binding stage is a little different for these
+        virtual void Bind();
+
     private:
         GLenum target() override;
         GLenum usage() override;
@@ -371,8 +391,16 @@ namespace mope
     class Instance
     {
     public:
-        Instance(const vec3f& position, const vec3f& scale, float rotation);
-        Instance(vec3f&& position, vec3f&& scale, float&& rotation);
+        struct Data
+        {
+            vec3f position{ 0.f, 0.f, -1.f };
+            vec3f scale{ 1.f, 1.f, 1.f };
+            float rotation{ 0 };
+        };
+
+        Instance() = default;
+        Instance(vec3f position, vec3f scale, float rotation);
+        Instance(Data data);
 
         mat4f Model() const;
         vec3f Position() const;
@@ -388,23 +416,21 @@ namespace mope
         //void Rotate(float);
 
     protected:
-        vec3f m_position;
-        vec3f m_scale;
-        float m_rotation;
+        Data m_data;
     };
 
     class Sprite
     {
     public:
-        Sprite(
-            Texture2D texture,
-            Shader shader,
-            vec2f leftBottom = { 0.f, 0.f },
-            vec2f rightTop = { 1.f, 1.f }
-        );
+        Sprite(Shader shader);
+        Sprite(Shader shader, Texture2D texture);
+        Sprite(Shader shader, Texture2D texture, vec2f left_bottom, vec2f right_top);
+
+        void SetTexture(Texture2D tex);
+        void SetTexture(vec2f left_bottom, vec2f right_top);
+        void SetTexture(Texture2D tex, vec2f left_bottom, vec2f right_top);
 
         void Render();
-        void SetTextureCorners(vec2f leftBottom, vec2f rightTop);
 
     protected:
         vec2f m_leftBottom{ 0.f, 0.f };
@@ -418,9 +444,15 @@ namespace mope
         Texture2D m_texture;
         Shader m_shader;
 
+
     private:
-        virtual void render() = 0;
-        virtual void prepare() = 0;
+        // steps for initial preparation
+        virtual void prepare();
+        virtual void fillVertices();
+        virtual void fillIndices();
+        virtual void fillAttribArray();
+
+        virtual void drawCall() = 0;
 
         bool m_prepared{ false };
     };
@@ -428,19 +460,17 @@ namespace mope
     class BasicSprite : public Sprite, public Instance
     {
     public:
+        using Sprite::Sprite;
         BasicSprite(
-            Texture2D texture,
+            Data data,
             Shader shader,
+            Texture2D texture = Texture2D{ },
             vec2f leftBottom = { 0.f, 0.f },
-            vec2f rightTop = { 1.f, 1.f },
-            vec3f position = { 0.f, 0.f, -1.f },
-            vec3f scale = { 1.f, 1.f, 1.f },
-            float rotation = 0
+            vec2f rightTop = { 1.f, 1.f }
         );
 
     private:
-        void render() override;
-        void prepare() override;
+        void drawCall() override;
     };
 
     class InstancedSprite : public Sprite
@@ -454,10 +484,10 @@ namespace mope
             vec3f scale = vec3f{ 1.f, 1.f, 1.f },
             float rotation = 0
         );
+        std::shared_ptr<Instance> MakeInstance(Instance::Data data);
 
     protected:
-        void render() override;
-        void prepare() override;
+        void drawCall() override;
 
         std::vector<std::weak_ptr<Instance>> m_instances{ };
         size_t m_bufferSize{ 0 };
@@ -468,7 +498,7 @@ namespace mope
     public:
         using BasicSprite::BasicSprite;
 
-        void SetTexture(Texture2D tex, vec2f leftBottom, vec2f rightTop);
+    private:
     };
 
 
@@ -628,6 +658,8 @@ namespace mope
 
 #endif // MOPE_ILLUSTRATOR_H
 
+// switch this while developing to make Visual Studio stop flipping out
+// #if 1
 #ifdef MOPE_ILLUSTRATOR_IMPL
 #undef MOPE_ILLUSTRATOR_IMPL
 
@@ -852,26 +884,7 @@ namespace mope
         // Support other platforms?
 #endif
 
-        defaultShader.Make(
-            "#version 430 core\n"
-            "uniform mat4 u_Projection;"
-            "uniform mat4 u_View;"
-            "uniform sampler2D u_Texture;"
-            "layout (location = 0) in vec2 i_Vertex;"
-            "layout (location = 1) in vec2 i_TexCoord;"
-            "layout (std430, binding = 0) buffer MatrixBlock { mat4 u_Models[]; };"
-            "out vec2 io_TexCoord;"
-            "void main() {"
-            "mat4 mvp = u_Projection * u_View * u_Models[gl_InstanceID];"
-            "gl_Position = mvp * vec4(i_Vertex, 0.0, 1.0);"
-            "io_TexCoord = i_TexCoord; }",
-
-            "#version 430 core\n"
-            "uniform sampler2D u_Texture;"
-            "in vec2 io_TexCoord;"
-            "out vec4 o_Color;"
-            "void main() {"
-            "o_Color = texture(u_Texture, io_TexCoord); }");
+        defaultShader.Make(settings::vertextShaderSource, settings::fragmentShaderSource);
         defaultShader.Use();
         defaultShader.SetUniform("u_Projection", mat4f::identity());
         defaultShader.SetUniform("u_View", mat4f::identity());
@@ -1264,16 +1277,22 @@ namespace mope
         m_id = 0;
     }
 
-    void BufferObject::Allocate(size_t size, const void* data)
+    void BufferObject::Fill(const void* data, size_t size, size_t offset)
     {
         Bind();
-        glBufferData(target(), size, data, usage());
+
+        if (!m_allocated) {
+            assert(offset == 0);
+            Allocate(size);
+        }
+
+        glBufferSubData(target(), offset, size, data);
     }
 
-    void BufferObject::Fill(size_t size, size_t offset, const void* data)
+    void BufferObject::Allocate(size_t size)
     {
-        Bind();
-        glBufferSubData(target(), offset, size, data);
+        glBufferData(target(), size, nullptr, usage());
+        m_allocated = true;
     }
 
     int BufferObject::Id() { return m_id; }
@@ -1285,138 +1304,165 @@ namespace mope
     GLenum SSBO::target() { return GL_SHADER_STORAGE_BUFFER; }
     GLenum SSBO::usage() { return GL_DYNAMIC_DRAW; }
 
+    void SSBO::Bind()
+    {
+        if (!Id()) {
+            Generate();
+        }
+        glBindBufferBase(target(), 0, Id());
+    }
+
 
     /*========================================================================*\
     |  Sprite                                                                  |
     \*========================================================================*/
 
-    Instance::Instance(vec3f&& position, vec3f&& scale, float&& rotation)
-        : m_position{ std::move(position) }
-        , m_scale{ std::move(scale) }
-        , m_rotation{ std::move(rotation) }
+    Instance::Instance(vec3f position, vec3f scale, float rotation)
+        : Instance(Data{ std::move(position), std::move(scale), std::move(rotation) })
     { }
 
-    Instance::Instance(const vec3f& position, const vec3f& scale, float rotation)
-        : Instance(vec3f{ position }, vec3f{ scale }, std::move(rotation))
+    Instance::Instance(Data data)
+        : m_data{ std::move(data) }
     { }
 
-    vec3f Instance::Position() const { return m_position; }
-    vec3f Instance::Scale() const { return m_scale; }
-    float Instance::Rotation() const { return m_rotation; }
+    vec3f Instance::Position() const { return m_data.position; }
+    vec3f Instance::Scale() const { return m_data.scale; }
+    float Instance::Rotation() const { return m_data.rotation; }
 
     void Instance::MoveTo(vec3f position)
     {
-        m_position = std::move(position);
+        m_data.position = std::move(position);
     }
 
     void Instance::Move(const vec3f& direction)
     {
-        m_position += direction;
+        m_data.position += direction;
     }
 
     void Instance::SetScale(vec3f factors)
     {
-        m_scale = std::move(factors);
+        m_data.scale = std::move(factors);
     }
 
     void Instance::ScaleBy(const vec3f& factors)
     {
-        m_scale.scaleby(factors);
+        m_data.scale.scaleby(factors);
     }
 
     mat4f Instance::Model() const
     {
-        mat4f translation = gl::translation(m_position);
-        mat4f scale = gl::scale(m_scale);
+        mat4f translation = gl::translation(m_data.position);
+        mat4f scale = gl::scale(m_data.scale);
         return translation * scale;
     }
 
-    Sprite::Sprite(Texture2D texture, Shader shader, vec2f leftBottom, vec2f rightTop)
-        : m_texture{ texture }
-        , m_shader{ shader }
-        , m_leftBottom{ leftBottom }
-        , m_rightTop{ rightTop }
+    Sprite::Sprite(Shader shader)
+        : m_shader{ shader }
+    { }
+
+    Sprite::Sprite(Shader shader, Texture2D texture)
+        : m_shader{ shader }
+        , m_texture{ texture }
+    { }
+
+    Sprite::Sprite(Shader shader, Texture2D texture, vec2f left_bottom, vec2f right_top)
+        : m_shader{ shader }
+        , m_texture{ texture }
+        , m_leftBottom{ left_bottom }
+        , m_rightTop{ right_top }
     { }
 
     void Sprite::Render()
     {
         if (!m_prepared) {
             prepare();
-            m_prepared = true;
         }
-
-        render();
-    }
-
-    void Sprite::SetTextureCorners(vec2f leftBottom, vec2f rightTop)
-    {
-        m_leftBottom = leftBottom;
-        m_rightTop = rightTop;
-
-        float left = m_leftBottom.x(),
-            bottom = m_leftBottom.y(),
-            right = m_rightTop.x(),
-            top = m_rightTop.y();
-
-        const GLfloat vertices[] = {
-            -0.5f,  -0.5f,  left,   bottom,
-            0.5f,   -0.5f,  right,  bottom,
-            -0.5f,  0.5f,   left,   top,
-            0.5f,   0.5f,   right,  top
-        };
-
-        m_vbo.Fill(sizeof(vertices), 0, vertices);
-    }
-
-    BasicSprite::BasicSprite(
-        Texture2D texture,
-        Shader shader,
-        vec2f leftBottom,
-        vec2f rightTop,
-        vec3f position,
-        vec3f scale,
-        float rotation
-    ) : Sprite{ texture, shader, leftBottom, rightTop }
-        , Instance{ std::move(position), std::move(scale), std::move(rotation) }
-    { }
-
-    void BasicSprite::prepare()
-    {
-        float left = m_leftBottom.x(),
-            bottom = m_leftBottom.y(),
-            right = m_rightTop.x(),
-            top = m_rightTop.y();
-        const GLfloat vertices[] = {
-            -0.5f,  -0.5f,  left,   bottom,
-            0.5f,   -0.5f,  right,  bottom,
-            -0.5f,  0.5f,   left,   top,
-            0.5f,   0.5f,   right,  top
-        };
-        const GLubyte indices[4] = { 0, 1, 2, 3 };
-
+        
+        m_shader.Use();
+        m_texture.Bind();
         m_vao.Bind();
-        m_vbo.Allocate(sizeof(vertices), vertices);
+        m_ssbo.Bind();
 
+        drawCall();
+    }
+
+    void Sprite::SetTexture(Texture2D tex)
+    {
+        m_texture = tex;
+    }
+
+    void Sprite::SetTexture(vec2f left_bottom, vec2f right_top)
+    {
+        m_leftBottom = left_bottom;
+        m_rightTop = right_top;
+        if (m_prepared) {
+            fillVertices();
+        }
+    }
+
+    void Sprite::SetTexture(Texture2D tex, vec2f left_bottom, vec2f right_top)
+    {
+        SetTexture(tex);
+        SetTexture(left_bottom, right_top);
+    }
+
+    void Sprite::prepare()
+    {
+        // need to bind VBO before filling attribs (I think)
+        fillVertices();
+        fillAttribArray();
+        fillIndices();
+        m_prepared = true;
+    }
+
+    void Sprite::fillVertices()
+    {
+        float left = m_leftBottom.x(),
+            bottom = m_leftBottom.y(),
+            right = m_rightTop.x(),
+            top = m_rightTop.y();
+        const GLfloat vertices[] = {
+            -0.5f,  -0.5f,  left,   bottom,
+            0.5f,   -0.5f,  right,  bottom,
+            -0.5f,  0.5f,   left,   top,
+            0.5f,   0.5f,   right,  top
+        };
+
+        m_vbo.Fill(vertices, sizeof(vertices));
+    }
+
+    void Sprite::fillIndices()
+    {
+        const GLubyte indices[4] = { 0, 1, 2, 3 };
+        m_ebo.Fill(indices, sizeof(indices));
+    }
+
+    void Sprite::fillAttribArray()
+    {
+        m_vao.Bind();
         glEnableVertexAttribArray(0);
         glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(GLfloat[4]), (void*)0);
         glEnableVertexAttribArray(1);
         glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(GLfloat[4]), (void*)(sizeof(GLfloat[2])));
-
-        m_ebo.Allocate(sizeof(indices), indices);
-        m_ssbo.Allocate(sizeof(mat4f));
     }
 
-    void BasicSprite::render()
+    BasicSprite::BasicSprite(
+        Data data,
+        Shader shader,
+        Texture2D texture,
+        vec2f leftBottom,
+        vec2f rightTop
+    )
+        : Sprite{ shader, texture, leftBottom, rightTop }
+        , Instance{ data }
+    { }
+
+    void BasicSprite::drawCall()
     {
-        m_texture.Bind();
-        m_shader.Use();
-        m_vao.Bind();
-
         mat4f model = Model();
-        m_ssbo.Fill(sizeof(model), 0, &model);
+        m_ssbo.Fill(&model, sizeof(model));
 
-        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_ssbo.Id());
-        glDrawElements(GL_TRIANGLE_STRIP, 4, GL_UNSIGNED_BYTE, (void*)0);
+        glDrawElements(GL_TRIANGLE_STRIP, 4, GL_UNSIGNED_BYTE, (void*)0); 
     }
 
     void InstancedSprite::AddInstance(std::shared_ptr<Instance> instance)
@@ -1426,42 +1472,18 @@ namespace mope
 
     std::shared_ptr<Instance> InstancedSprite::MakeInstance(vec3f position, vec3f scale, float rotation)
     {
-        std::shared_ptr<Instance> instance = std::make_shared<Instance>(position, scale, rotation);
+        return MakeInstance({ position, scale, rotation });
+    }
+
+    std::shared_ptr<Instance> InstancedSprite::MakeInstance(Instance::Data data)
+    {
+        std::shared_ptr<Instance> instance = std::make_shared<Instance>(data);
         AddInstance(instance);
         return instance;
     }
 
-    void InstancedSprite::prepare()
+    void InstancedSprite::drawCall()
     {
-        float left = m_leftBottom.x(),
-            bottom = m_leftBottom.y(),
-            right = m_rightTop.x(),
-            top = m_rightTop.y();
-        const GLfloat vertices[] = {
-            -0.5f,  -0.5f,  left,   bottom,
-            0.5f,   -0.5f,  right,  bottom,
-            -0.5f,  0.5f,   left,   top,
-            0.5f,   0.5f,   right,  top
-        };
-        const GLubyte indices[4] = { 0, 1, 2, 3 };
-
-        m_vao.Bind();
-        m_vbo.Allocate(sizeof(vertices), vertices);
-
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(GLfloat[4]), (void*)0);
-        glEnableVertexAttribArray(1);
-        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(GLfloat[4]), (void*)(sizeof(GLfloat[2])));
-
-        m_ebo.Allocate(sizeof(indices), indices);
-    }
-
-    void InstancedSprite::render()
-    {
-        m_texture.Bind();
-        m_shader.Use();
-        m_vao.Bind();
-
         std::vector<mat4f> sub_data;
 
         // copy all model matrices into sub_data, at the same time removing expired instances
@@ -1492,16 +1514,11 @@ namespace mope
         }
 
         // fill the shader storage buffer and draw
-        m_ssbo.Fill(sizeof(mat4f) * sub_data.size(), 0, sub_data.data());
-        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_ssbo.Id());
+        m_ssbo.Fill(sub_data.data(), sizeof(mat4f) * sub_data.size());
+
         glDrawElementsInstanced(GL_TRIANGLE_STRIP, 4, GL_UNSIGNED_BYTE, (void*)0, m_instances.size());
     }
 
-    void AnimatedSprite::SetTexture(Texture2D tex, vec2f leftBottom, vec2f rightTop)
-    {
-        m_texture = tex;
-        SetTextureCorners(leftBottom, rightTop);
-    }
 }
 
 #endif //MOPE_ILLUSTRATOR_IMPL
