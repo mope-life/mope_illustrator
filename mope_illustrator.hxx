@@ -137,6 +137,7 @@ GL_PROC_LIST
 #undef GL_PROC
 // whew!
 
+
 /*============================================================================*\
 |  Declarations                                                                |
 \*============================================================================*/
@@ -205,18 +206,61 @@ namespace mope
         );
     }
 
+    using GLuint_deleter_t = void(*)(GLuint*);
+
+    template<class ptr_t>
+    class BindableObject
+    {
+    public:
+        BindableObject(GLuint_deleter_t deleter)
+            : m_id{ new GLuint(0), std::move(deleter) }
+        { }
+
+        virtual ~BindableObject() = default;
+
+        void Bind() {
+            bind(ID());
+        }
+
+        GLuint ID() {
+            GLuint id = *m_id;
+            return id ? id : (generate(m_id.get()), *m_id);
+        }
+
+    private:
+        virtual void generate(GLuint* p_id) = 0;
+        virtual void bind(GLuint id) = 0;
+
+        ptr_t m_id;
+    };
+
+    class SharedBindableObject
+        : public BindableObject<std::shared_ptr<GLuint>>
+    {
+    public:
+        using BindableObject::BindableObject;
+        virtual ~SharedBindableObject() = default;
+    };
+
+    class UniqueBindableObject
+        : public BindableObject<std::unique_ptr<GLuint, GLuint_deleter_t>>
+    {
+    public:
+        using BindableObject::BindableObject;
+        virtual ~UniqueBindableObject() = default;
+    };
+
+
     /*========================================================================*\
     |  Shader                                                                  |
     \*========================================================================*/
 
-    class Shader
+    class Shader : public SharedBindableObject
     {
     public:
-        GLuint Id();
-        void Use();
+        Shader();
 
         void Make(std::string_view srcVertex, std::string_view srcFragment);
-        void Release();
 
         void SetUniform(const char* name, float value);
         void SetUniform(const char* name, int value);
@@ -226,52 +270,33 @@ namespace mope
         void SetUniform(const char* name, const mat4f& value, bool transpose = false);
 
     private:
-        struct _Shader
-        {
-            ~_Shader();
-            GLuint Id();
-        private:
-            GLuint id{ 0 };
-        };
-
-        std::shared_ptr<_Shader> m_shader = std::make_shared<_Shader>();
+        void generate(GLuint* p_id) override;
+        void bind(GLuint id) override;
 
         GLuint compile(std::string_view srcShader, GLenum type);
         void checkErrors(GLuint object, bool isProgram = false);
     };
 
+
     /*========================================================================*\
     |  Texture                                                                 |
     \*========================================================================*/
 
-    class Texture
+    class Texture : public SharedBindableObject
     {
     public:
+        Texture();
         virtual ~Texture() = default;
 
-        virtual void Bind() = 0;
-
-        GLuint Id();
-        void Release();
-
-    protected:
-        struct _Texture
-        {
-            ~_Texture();
-            GLuint Id();
-        private:
-            GLuint id{ 0 };
-        };
-
-        std::shared_ptr<_Texture> m_texture = std::make_shared<_Texture>();
+    private:
+        void generate(GLuint* p_id) override;
     };
 
     class Texture2D : public Texture
     {
     public:
-        ~Texture2D() = default;
+        using Texture::Texture;
 
-        void Bind() override;
         void Make(std::string_view filename);
         void Make(GLsizei width, GLsizei height, Pixel* data);
         void Make(GLsizei width, GLsizei height, float* data);
@@ -279,51 +304,39 @@ namespace mope
         void Make(GLsizei width, GLsizei height, void* data, GLenum format, GLenum type);
 
         void UpdateData(Pixel* data, int x, int y, int width, int height);
+
+    private:
+        void bind(GLuint id) override;
     };
+
 
     /*========================================================================*\
     |  VAO, VBO, etc...                                                        |
     \*========================================================================*/
 
-    class VAO
+    class VAO : public UniqueBindableObject
     {
     public:
-        VAO() = default;
-        ~VAO();
-        VAO(const VAO&) = delete;
-        VAO& operator=(const VAO&) = delete;
-        VAO(VAO&&) noexcept;
-        VAO& operator=(VAO&&) noexcept;
-
-        void Generate();
-        void Bind();
-        void Release();
+        VAO();
 
     private:
-        GLuint m_id{ 0 };
+        void generate(GLuint *p_id) override;
+        void bind(GLuint id) override;
     };
 
-    class BufferObject
+    class BufferObject : public UniqueBindableObject
     {
     public:
-        BufferObject() = default;
-        ~BufferObject();
-        BufferObject(const BufferObject&) = delete;
-        BufferObject& operator=(const BufferObject&) = delete;
-        BufferObject(BufferObject&&) noexcept;
-        BufferObject& operator=(BufferObject&&) noexcept;
+        BufferObject();
 
-        void Bind();
-        void Generate();
-        void Release();
         void Fill(const void* data, size_t size, size_t offset = 0);
-        void Allocate(size_t size);
-
-        int Id();
+        void Resize(size_t size);
 
     private:
-        GLuint m_id{ 0 };
         bool m_allocated{ false };
+
+        void generate(GLuint *p_id) override;
+        void bind(GLuint id) override;
 
         virtual GLenum target() = 0;
         virtual GLenum usage() = 0;
@@ -345,14 +358,14 @@ namespace mope
 
     class SSBO : public BufferObject
     {
-    public:
-        // binding stage is a little different for these
-        virtual void Bind();
-
     private:
+        // binding stage is a little different for these
+        void bind(GLuint id) override;
+
         GLenum target() override;
         GLenum usage() override;
     };
+
 
     /*========================================================================*\
     |  Camera                                                                  |
@@ -384,6 +397,7 @@ namespace mope
         vec3f basisZ{ 0.f, 0.f, 1.f };
     };
 
+
     /*========================================================================*\
     |  Sprite                                                                  |
     \*========================================================================*/
@@ -402,7 +416,7 @@ namespace mope
         Instance(vec3f position, vec3f scale, float rotation);
         Instance(Data data);
 
-        mat4f Model() const;
+        const mat4f* Model();
         vec3f Position() const;
         vec3f Scale() const;
         float Rotation() const;
@@ -417,6 +431,8 @@ namespace mope
 
     protected:
         Data m_data;
+        mat4f m_model;
+        bool m_recompute{ true };
     };
 
     class Sprite
@@ -443,7 +459,6 @@ namespace mope
 
         Texture2D m_texture;
         Shader m_shader;
-
 
     private:
         // steps for initial preparation
@@ -870,7 +885,7 @@ namespace mope
 
     void IllustratorCore::coreLoop()
     {
-        auto rc = m_window->getRenderer();
+        auto renderer = m_window->getRenderer();
 
         updateSize(true);
 
@@ -885,7 +900,7 @@ namespace mope
 #endif
 
         defaultShader.Make(settings::vertextShaderSource, settings::fragmentShaderSource);
-        defaultShader.Use();
+        defaultShader.Bind();
         defaultShader.SetUniform("u_Projection", mat4f::identity());
         defaultShader.SetUniform("u_View", mat4f::identity());
 
@@ -909,7 +924,9 @@ namespace mope
 
                 // show the frame
                 glClear(GL_COLOR_BUFFER_BIT);
-                gameUpdate(m_frameTime) ? rc->showFrame() : m_window->close();
+                gameUpdate(m_frameTime)
+                    ? renderer->showFrame()
+                    : m_window->close();
             }
         }
 
@@ -993,6 +1010,14 @@ namespace mope
     |  Shader                                                                  |
     \*========================================================================*/
 
+    Shader::Shader()
+        : SharedBindableObject(
+            [](GLuint* p_id) {
+                glDeleteProgram(*p_id);
+                delete p_id;
+            })
+    { }
+
     void Shader::Make(std::string_view srcVertex, std::string_view srcFragment)
     {
         GLuint shader_vert = compile(srcVertex, GL_VERTEX_SHADER);
@@ -1001,7 +1026,7 @@ namespace mope
         GLuint shader_frag = compile(srcFragment, GL_FRAGMENT_SHADER);
         checkErrors(shader_frag);
 
-        GLuint id = Id();
+        GLuint id = ID();
         glAttachShader(id, shader_vert);
         glAttachShader(id, shader_frag);
         glLinkProgram(id);
@@ -1013,54 +1038,39 @@ namespace mope
         glDeleteShader(shader_frag);
     }
 
-    void Shader::Release()
-    {
-        m_shader.reset();
-    }
-
-    GLuint Shader::Id()
-    {
-        return m_shader->Id();
-    }
-
-    void Shader::Use()
-    {
-        glUseProgram(Id());
-    }
-
     void Shader::SetUniform(const char* name, float value)
     {
-        int loc = glGetUniformLocation(Id(), name);
+        int loc = glGetUniformLocation(ID(), name);
         glUniform1f(loc, value);
     }
 
     void Shader::SetUniform(const char* name, int value)
     {
-        int loc = glGetUniformLocation(Id(), name);
+        int loc = glGetUniformLocation(ID(), name);
         glUniform1i(loc, value);
     }
 
     void Shader::SetUniform(const char* name, const vec2f& value)
     {
-        int loc = glGetUniformLocation(Id(), name);
+        int loc = glGetUniformLocation(ID(), name);
         glUniform2fv(loc, 1, value.elements);
     }
 
     void Shader::SetUniform(const char* name, const mat2f& value, bool transpose)
     {
-        int loc = glGetUniformLocation(Id(), name);
+        int loc = glGetUniformLocation(ID(), name);
         glUniformMatrix2fv(loc, 1, transpose, &value[0][0]);
     }
 
     void Shader::SetUniform(const char* name, const mat3f& value, bool transpose)
     {
-        int loc = glGetUniformLocation(Id(), name);
+        int loc = glGetUniformLocation(ID(), name);
         glUniformMatrix3fv(loc, 1, transpose, &value[0][0]);
     }
 
     void Shader::SetUniform(const char* name, const mat4f& value, bool transpose)
     {
-        int loc = glGetUniformLocation(Id(), name);
+        int loc = glGetUniformLocation(ID(), name);
         glUniformMatrix4fv(loc, 1, transpose, &value[0][0]);
     }
 
@@ -1096,17 +1106,14 @@ namespace mope
         }
     }
 
-    GLuint Shader::_Shader::Id()
+    void Shader::generate(GLuint* p_id)
     {
-        if (!id) {
-            id = glCreateProgram();
-        }
-        return id;
+        *p_id = glCreateProgram();
     }
 
-    Shader::_Shader::~_Shader()
+    void Shader::bind(GLuint id)
     {
-        glDeleteProgram(id);
+        glUseProgram(id);
     }
 
 
@@ -1114,32 +1121,22 @@ namespace mope
     |  Texture                                                                 |
     \*========================================================================*/
 
-    GLuint Texture::Id()
+    Texture::Texture()
+        : SharedBindableObject(
+            [](GLuint* p_id) {
+                glDeleteTextures(1, p_id);
+                delete p_id;
+            })
+    { }
+
+    void Texture::generate(GLuint* p_id)
     {
-        return m_texture->Id();
+        glGenTextures(1, p_id);
     }
 
-    void Texture::Release()
+    void Texture2D::bind(GLuint id)
     {
-        m_texture.reset();
-    }
-
-    GLuint Texture::_Texture::Id()
-    {
-        if (!id) {
-            glGenTextures(1, &id);
-        }
-        return id;
-    }
-
-    Texture::_Texture::~_Texture()
-    {
-        glDeleteTextures(1, &id);
-    }
-
-    void Texture2D::Bind()
-    {
-        glBindTexture(GL_TEXTURE_2D, Id());
+        glBindTexture(GL_TEXTURE_2D, id);
     }
 
     void Texture2D::Make(std::string_view filename)
@@ -1199,103 +1196,62 @@ namespace mope
     |  VAO, VBO, etc...                                                        |
     \*========================================================================*/
 
-    VAO::~VAO()
+    VAO::VAO()
+        : UniqueBindableObject(
+            [](GLuint* p_id) {
+                glDeleteVertexArrays(1, p_id);
+                delete p_id;
+            })
+    { }
+
+    void VAO::generate(GLuint* p_id)
     {
-        Release();
+        glGenVertexArrays(1, p_id);
     }
 
-    VAO::VAO(VAO&& other) noexcept
-        : m_id{ other.m_id }
+    void VAO::bind(GLuint id)
     {
-        other.m_id = 0;
+        glBindVertexArray(id);
     }
 
-    VAO& VAO::operator=(VAO&& other) noexcept
+    BufferObject::BufferObject()
+        : UniqueBindableObject(
+            [](GLuint* p_id) {
+                glDeleteBuffers(1, p_id);
+                delete p_id;
+            }
+        )
+    { }
+
+    void BufferObject::generate(GLuint* p_id)
     {
-        if (this != &other) {
-            Release();
-            std::swap(m_id, other.m_id);
-        }
-        return *this;
+        glGenBuffers(1, p_id);
     }
 
-    void VAO::Generate()
+    void BufferObject::bind(GLuint id)
     {
-        glGenVertexArrays(1, &m_id);
-    }
-
-    void VAO::Bind()
-    {
-        if (!m_id) {
-            Generate();
-        }
-        glBindVertexArray(m_id);
-    }
-
-    void VAO::Release()
-    {
-        glDeleteVertexArrays(1, &m_id);
-        m_id = 0;
-    }
-
-    BufferObject::~BufferObject()
-    {
-        Release();
-    }
-
-    BufferObject::BufferObject(BufferObject&& other) noexcept
-        : m_id{ other.m_id }
-    {
-        other.m_id = 0;
-    }
-
-    BufferObject& BufferObject::operator=(BufferObject&& other) noexcept
-    {
-        if (this != &other) {
-            Release();
-            std::swap(m_id, other.m_id);
-        }
-        return *this;
-    }
-
-    void BufferObject::Generate()
-    {
-        glGenBuffers(1, &m_id);
-    }
-
-    void BufferObject::Bind()
-    {
-        if (!m_id) {
-            Generate();
-        }
-        glBindBuffer(target(), m_id);
-    }
-
-    void BufferObject::Release()
-    {
-        glDeleteBuffers(1, &m_id);
-        m_id = 0;
+        glBindBuffer(target(), id);
     }
 
     void BufferObject::Fill(const void* data, size_t size, size_t offset)
     {
         Bind();
-
         if (!m_allocated) {
             assert(offset == 0);
-            Allocate(size);
+            glBufferData(target(), size, data, usage());
+            m_allocated = true;
         }
-
-        glBufferSubData(target(), offset, size, data);
+        else {
+            glBufferSubData(target(), offset, size, data);
+        }
     }
 
-    void BufferObject::Allocate(size_t size)
+    void BufferObject::Resize(size_t size)
     {
+        Bind();
         glBufferData(target(), size, nullptr, usage());
         m_allocated = true;
     }
-
-    int BufferObject::Id() { return m_id; }
 
     GLenum VBO::target() { return GL_ARRAY_BUFFER; }
     GLenum VBO::usage() { return GL_STATIC_DRAW; }
@@ -1304,12 +1260,9 @@ namespace mope
     GLenum SSBO::target() { return GL_SHADER_STORAGE_BUFFER; }
     GLenum SSBO::usage() { return GL_DYNAMIC_DRAW; }
 
-    void SSBO::Bind()
+    void SSBO::bind(GLuint id)
     {
-        if (!Id()) {
-            Generate();
-        }
-        glBindBufferBase(target(), 0, Id());
+        glBindBufferBase(target(), 0, id);
     }
 
 
@@ -1332,28 +1285,37 @@ namespace mope
     void Instance::MoveTo(vec3f position)
     {
         m_data.position = std::move(position);
+        m_recompute = true;
     }
 
     void Instance::Move(const vec3f& direction)
     {
         m_data.position += direction;
+        m_recompute = true;
     }
 
     void Instance::SetScale(vec3f factors)
     {
         m_data.scale = std::move(factors);
+        m_recompute = true;
     }
 
     void Instance::ScaleBy(const vec3f& factors)
     {
         m_data.scale.scaleby(factors);
+        m_recompute = true;
     }
 
-    mat4f Instance::Model() const
+    const mat4f* Instance::Model()
     {
-        mat4f translation = gl::translation(m_data.position);
-        mat4f scale = gl::scale(m_data.scale);
-        return translation * scale;
+        if (m_recompute) {
+            mat4f translation = gl::translation(m_data.position);
+            mat4f scale = gl::scale(m_data.scale);
+            m_model = translation * scale;
+            m_recompute = false;
+        }
+
+        return &m_model;
     }
 
     Sprite::Sprite(Shader shader)
@@ -1378,10 +1340,9 @@ namespace mope
             prepare();
         }
         
-        m_shader.Use();
+        m_shader.Bind();
         m_texture.Bind();
         m_vao.Bind();
-        m_ssbo.Bind();
 
         drawCall();
     }
@@ -1459,8 +1420,10 @@ namespace mope
 
     void BasicSprite::drawCall()
     {
-        mat4f model = Model();
-        m_ssbo.Fill(&model, sizeof(model));
+        m_ssbo.Bind();
+
+        const mat4f* model = Model();
+        m_ssbo.Fill(model, sizeof(*model));
 
         glDrawElements(GL_TRIANGLE_STRIP, 4, GL_UNSIGNED_BYTE, (void*)0); 
     }
@@ -1484,7 +1447,7 @@ namespace mope
 
     void InstancedSprite::drawCall()
     {
-        std::vector<mat4f> sub_data;
+        auto sub_data = std::make_unique<mat4f[]>(m_instances.size());
 
         // copy all model matrices into sub_data, at the same time removing expired instances
         auto prev_end{ m_instances.end() };
@@ -1493,7 +1456,12 @@ namespace mope
         {
             if (auto p_instance = iter->lock())
             {
-                sub_data.push_back(p_instance->Model());
+                std::memcpy(
+                    &sub_data[std::distance(m_instances.begin(), iter)],
+                    p_instance->Model(),
+                    sizeof(*p_instance->Model())
+                );
+
                 if (new_end != prev_end) {
                     *new_end++ = std::move(*iter);
                 }
@@ -1505,20 +1473,19 @@ namespace mope
         m_instances.erase(new_end, prev_end);
 
         // resize the shader storage buffer if necessary
-        if (sub_data.size() > m_bufferSize)
+        if (m_instances.size() > m_bufferSize)
         {
             do {
                 m_bufferSize = m_bufferSize ? static_cast<size_t>(m_bufferSize * settings::ssboResizeFactor) : 1;
-            } while (sub_data.size() > m_bufferSize);
-            m_ssbo.Allocate(sizeof(mat4f) * m_bufferSize);
+            } while (m_instances.size() > m_bufferSize);
+            m_ssbo.Resize(sizeof(mat4f) * m_bufferSize);
         }
 
         // fill the shader storage buffer and draw
-        m_ssbo.Fill(sub_data.data(), sizeof(mat4f) * sub_data.size());
+        m_ssbo.Fill(sub_data.get(), sizeof(mat4f) * m_instances.size());
 
         glDrawElementsInstanced(GL_TRIANGLE_STRIP, 4, GL_UNSIGNED_BYTE, (void*)0, m_instances.size());
     }
-
 }
 
 #endif //MOPE_ILLUSTRATOR_IMPL
