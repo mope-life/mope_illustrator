@@ -188,7 +188,8 @@ namespace mope
         // Transformation matrices
         constexpr mat4f translation(const vec3f& offsets);
         constexpr mat4f scale(const vec3f& factors);
-        mat4f rotation(const float angle, const vec3f& axis, const vec3f& origin);
+        // mat4f rotation(const float angle, const vec3f& axis, const vec3f& origin);
+
         // Projection matrices
         constexpr mat4f ortho(
             const float left,
@@ -460,15 +461,14 @@ namespace mope
         Texture2D m_texture;
         Shader m_shader;
 
-    private:
         // steps for initial preparation
         virtual void prepare();
         virtual void fillVertices();
         virtual void fillIndices();
         virtual void fillAttribArray();
-
         virtual void drawCall() = 0;
 
+    private:
         bool m_prepared{ false };
     };
 
@@ -476,6 +476,7 @@ namespace mope
     {
     public:
         using Sprite::Sprite;
+
         BasicSprite(
             Data data,
             Shader shader,
@@ -511,9 +512,33 @@ namespace mope
     class AnimatedSprite : public BasicSprite
     {
     public:
-        using BasicSprite::BasicSprite;
+        AnimatedSprite(Data data, Shader shader);
+
+        struct Frame
+        {
+            Texture2D texture;
+            vec2f leftBottom;
+            vec2f rightTop;
+            double time;
+        };
+
+        void AddFrame(Frame frame);
+        void SetAll(std::vector<Frame> frames);
+        void DropFrame(size_t idx);
+        void DropAll();
+
+        void Next();
+        void SwitchTo(size_t idx, bool ignore_elapsed = true);
+        void Render(double elapsed);
 
     private:
+        void nextFrame();
+        void updateTexture();
+
+        bool m_ignoreElapsed;
+        size_t m_currentFrame{ 0 };
+        double m_currentFrameTime{ 0 };
+        std::vector<Frame> m_frames{ };
     };
 
 
@@ -1485,6 +1510,79 @@ namespace mope
         m_ssbo.Fill(sub_data.get(), sizeof(mat4f) * m_instances.size());
 
         glDrawElementsInstanced(GL_TRIANGLE_STRIP, 4, GL_UNSIGNED_BYTE, (void*)0, m_instances.size());
+    }
+
+    AnimatedSprite::AnimatedSprite(Data data, Shader shader)
+        : BasicSprite(data, shader)
+    { }
+
+    void AnimatedSprite::AddFrame(Frame frame)
+    {
+        m_frames.push_back(std::move(frame));
+    }
+
+    void AnimatedSprite::SetAll(std::vector<Frame> frames)
+    {
+        m_frames = frames;
+    }
+
+    void AnimatedSprite::DropFrame(size_t idx)
+    {
+        m_frames.erase(m_frames.begin() + idx);
+    }
+
+    void AnimatedSprite::DropAll()
+    {
+        m_frames.clear();
+    }
+
+    void AnimatedSprite::Next()
+    {
+        nextFrame();
+        updateTexture();
+    }
+
+    void AnimatedSprite::SwitchTo(size_t idx, bool ignore_elapsed)
+    {
+        m_currentFrame = idx;
+        m_ignoreElapsed = ignore_elapsed;
+        updateTexture();
+    }
+
+    void AnimatedSprite::Render(double elapsed)
+    {
+        if (!m_ignoreElapsed) {
+            m_currentFrameTime += elapsed;
+        }
+        m_ignoreElapsed = false;
+
+        bool updated = false;
+        while (m_currentFrameTime > m_frames[m_currentFrame].time) {
+            m_currentFrameTime -= m_frames[m_currentFrame].time;
+            nextFrame();
+            updated = true;
+        }
+        if (updated) {
+            updateTexture();
+        }
+
+        BasicSprite::Render();
+    }
+
+    void AnimatedSprite::nextFrame()
+    {
+        if (++m_currentFrame >= m_frames.size())
+        {
+            m_currentFrame = 0;
+        }
+    }
+
+    void AnimatedSprite::updateTexture()
+    {
+        m_texture = m_frames[m_currentFrame].texture;
+        m_leftBottom = m_frames[m_currentFrame].leftBottom;
+        m_rightTop = m_frames[m_currentFrame].rightTop;
+        fillVertices();
     }
 }
 
